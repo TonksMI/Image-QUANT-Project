@@ -1,8 +1,8 @@
 # Pipeline date ranges, paths, and model configuration
 # All paths use forward slashes and are relative to data_root unless absolute
 
-data_root: "C:/urbangrowth_data"          # override with env var URBANGROWTH_DATA_ROOT
-log_dir: "C:/Users/17ton/urbangrowth/logs"
+data_root: "D:/urbangrowth_data"          # override with env var URBANGROWTH_DATA_ROOT
+log_dir: "D:/urbangrowth_data/logs"
 
 dates:
   history_start: "2015-01-01"
@@ -23,7 +23,7 @@ modeling:
   backtest_long_pct: 0.2                  # top 20% long
   backtest_short_pct: 0.2                 # bottom 20% short
   transaction_cost_bps: 10
-  model_dir: "C:/urbangrowth_data/models"
+  model_dir: "D:/urbangrowth_data/models"
 
 raster:
   resampling: "bilinear"
