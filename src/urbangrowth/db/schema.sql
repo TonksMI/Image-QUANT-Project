@@ -1,11 +1,18 @@
 -- Urban Growth Research Platform — PostgreSQL schema
--- Requires: PostgreSQL 16 + PostGIS 3.4
+-- Requires: PostgreSQL 16+; PostGIS 3.4 is OPTIONAL (geometry columns skipped if absent)
 -- h3 / h3_postgis are optional (install via pgxn on Windows if needed)
 -- Run: psql -U urbangrowth -d urbangrowth -f src/urbangrowth/db/schema.sql
 
 -- ── EXTENSIONS ───────────────────────────────────────────────────────────────
-CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE EXTENSION IF NOT EXISTS postgis_raster;
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS postgis;
+    CREATE EXTENSION IF NOT EXISTS postgis_raster;
+    RAISE NOTICE 'PostGIS extensions loaded.';
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'PostGIS not available — geometry columns will be omitted. Install PostGIS 3.4+ for full spatial support.';
+END;
+$$;
 
 -- h3 / h3_postgis: optional on Windows — all H3 logic can run in Python (h3-py)
 DO $$
@@ -19,55 +26,98 @@ $$;
 
 -- ── CITY-LEVEL TABLES ─────────────────────────────────────────────────────────
 
+-- cities table: bbox geometry column added conditionally if PostGIS is present
 CREATE TABLE IF NOT EXISTS cities (
     city_id     SERIAL PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,     -- "phoenix" | "austin"
     state       CHAR(2) NOT NULL,
-    bbox        GEOMETRY(Polygon, 4326),   -- bounding box polygon
     utm_epsg    INTEGER NOT NULL           -- 32612 (Phoenix) | 32614 (Austin)
 );
 
--- Seed the two cities defined in cities.yaml
-INSERT INTO cities (name, state, bbox, utm_epsg) VALUES
-    ('phoenix', 'AZ',
-     ST_MakeEnvelope(-112.35, 33.20, -111.65, 33.85, 4326), 32612),
-    ('austin',  'TX',
-     ST_MakeEnvelope(-97.98,  30.10, -97.40,  30.65, 4326), 32614)
-ON CONFLICT (name) DO NOTHING;
+DO $$
+BEGIN
+    ALTER TABLE cities ADD COLUMN IF NOT EXISTS bbox geometry(Polygon, 4326);
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Skipping cities.bbox geometry column (PostGIS unavailable).';
+END;
+$$;
 
+-- Seed the two cities
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'st_makeenvelope') THEN
+        INSERT INTO cities (name, state, bbox, utm_epsg) VALUES
+            ('phoenix', 'AZ',
+             ST_MakeEnvelope(-112.35, 33.20, -111.65, 33.85, 4326), 32612),
+            ('austin',  'TX',
+             ST_MakeEnvelope(-97.98,  30.10, -97.40,  30.65, 4326), 32614)
+        ON CONFLICT (name) DO NOTHING;
+    ELSE
+        INSERT INTO cities (name, state, utm_epsg) VALUES
+            ('phoenix', 'AZ', 32612),
+            ('austin',  'TX', 32614)
+        ON CONFLICT (name) DO NOTHING;
+    END IF;
+END;
+$$;
+
+-- zoning_snapshots: geometry column added conditionally
 CREATE TABLE IF NOT EXISTS zoning_snapshots (
     id                      BIGSERIAL PRIMARY KEY,
     city_id                 INTEGER NOT NULL REFERENCES cities(city_id),
     snapshot_date           DATE NOT NULL,
     parcel_id               TEXT,
     zone_code_raw           TEXT,
-    zone_code_normalized    TEXT,   -- residential | commercial | industrial | mixed | open_space
-    geometry                GEOMETRY(MultiPolygon, 4326)
+    zone_code_normalized    TEXT    -- residential | commercial | industrial | mixed | open_space
 );
-CREATE INDEX IF NOT EXISTS idx_zoning_geom     ON zoning_snapshots USING GIST(geometry);
+
+DO $$
+BEGIN
+    ALTER TABLE zoning_snapshots ADD COLUMN IF NOT EXISTS geometry geometry(MultiPolygon, 4326);
+    CREATE INDEX IF NOT EXISTS idx_zoning_geom ON zoning_snapshots USING GIST(geometry);
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Skipping zoning_snapshots.geometry (PostGIS unavailable).';
+END;
+$$;
 CREATE INDEX IF NOT EXISTS idx_zoning_city_date ON zoning_snapshots (city_id, snapshot_date);
 
+-- city_permits: geometry column added conditionally
 CREATE TABLE IF NOT EXISTS city_permits (
     permit_id   TEXT NOT NULL,
     city_id     INTEGER NOT NULL REFERENCES cities(city_id),
     issue_date  DATE,
     type        TEXT,           -- residential_new | commercial_new | addition | remodel
     valuation   NUMERIC(14,2),
-    geometry    GEOMETRY(Point, 4326),
     PRIMARY KEY (permit_id, city_id)
 );
-CREATE INDEX IF NOT EXISTS idx_city_permits_geom ON city_permits USING GIST(geometry);
+
+DO $$
+BEGIN
+    ALTER TABLE city_permits ADD COLUMN IF NOT EXISTS geometry geometry(Point, 4326);
+    CREATE INDEX IF NOT EXISTS idx_city_permits_geom ON city_permits USING GIST(geometry);
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Skipping city_permits.geometry (PostGIS unavailable).';
+END;
+$$;
 CREATE INDEX IF NOT EXISTS idx_city_permits_date ON city_permits (issue_date);
 
+-- parcels: geometry column added conditionally
 CREATE TABLE IF NOT EXISTS parcels (
     parcel_id   TEXT NOT NULL,
     city_id     INTEGER NOT NULL REFERENCES cities(city_id),
     acreage     NUMERIC(10,4),
     year_built  SMALLINT,
-    geometry    GEOMETRY(MultiPolygon, 4326),
     PRIMARY KEY (parcel_id, city_id)
 );
-CREATE INDEX IF NOT EXISTS idx_parcels_geom ON parcels USING GIST(geometry);
+
+DO $$
+BEGIN
+    ALTER TABLE parcels ADD COLUMN IF NOT EXISTS geometry geometry(MultiPolygon, 4326);
+    CREATE INDEX IF NOT EXISTS idx_parcels_geom ON parcels USING GIST(geometry);
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Skipping parcels.geometry (PostGIS unavailable).';
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS sentinel_scenes (
     scene_id    TEXT PRIMARY KEY,

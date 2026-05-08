@@ -176,6 +176,7 @@ def doctor() -> None:
                 fg=typer.colors.GREEN,
             ))
         except Exception:
+            conn.rollback()
             warnings.append("PostGIS extension not installed — run 01_init_postgis.sh")
             typer.echo(typer.style(
                 f"⚠  PostgreSQL connected but PostGIS missing — run 01_init_postgis.sh",

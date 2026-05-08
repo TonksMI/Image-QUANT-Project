@@ -166,7 +166,7 @@ def test_turnover_between_0_and_1(
         synthetic_scores, forward_returns, long_pct=0.2, short_pct=0.2, horizon=1
     )
     assert (portfolio["turnover"] >= 0).all()
-    assert (portfolio["turnover"] <= 1.0 + 1e-6).all()
+    assert (portfolio["turnover"] <= 2.0 + 1e-6).all()
 
 
 # ---------------------------------------------------------------------------

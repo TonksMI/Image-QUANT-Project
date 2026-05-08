@@ -55,6 +55,15 @@ def _cell_to_latlng(cell: str) -> tuple[float, float]:
         return h3.h3_to_geo(cell)                  # 3.x
 
 def _polyfill_bbox(west, south, east, north, res: int) -> set[str]:
+    # h3-py 4.x API
+    try:
+        poly = h3.LatLngPoly([
+            (south, west), (south, east), (north, east), (north, west),
+        ])
+        return set(h3.h3shape_to_cells(poly, res))
+    except AttributeError:
+        pass
+    # h3-py 3.x fallback
     geojson = {
         "type": "Polygon",
         "coordinates": [[
@@ -65,7 +74,7 @@ def _polyfill_bbox(west, south, east, north, res: int) -> set[str]:
     try:
         return set(h3.polyfill_geojson(geojson, res))
     except AttributeError:
-        return h3.polyfill(geojson, res, geo_json_conformant=True)
+        return set(h3.polyfill(geojson, res, geo_json_conformant=True))
 
 # h3ronpy fast path
 try:

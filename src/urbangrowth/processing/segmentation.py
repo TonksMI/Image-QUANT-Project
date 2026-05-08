@@ -393,7 +393,7 @@ class LandCoverSegmenter:
 
         # ── Load composite ────────────────────────────────────────────────────
         with rasterio.open(composite_path) as src:
-            arr = src.read(np.array(INPUT_BAND_IDX) + 1).astype(np.float32)
+            arr = src.read((np.array(INPUT_BAND_IDX) + 1).tolist()).astype(np.float32)
             crs       = src.crs
             transform = src.transform
         _, H, W = arr.shape
@@ -470,15 +470,15 @@ class LandCoverSegmenter:
         }
         with rasterio.open(output_path, "w", **profile_class) as dst:
             dst.write(class_map[np.newaxis])
+            # Store class names as a comma-separated dataset-level tag
+            # (band-level tags require matching band count; class raster has 1 band)
             dst.update_tags(classes=",".join(CLASSES))
-            for i, name in enumerate(CLASSES):
-                dst.update_tags(i + 1, class_name=name)
         log.info("class_raster_written", path=str(output_path))
 
-        # ── Write probability raster (float16, 9 bands) ───────────────────────
-        profile_prob = {**profile_class, "dtype": "float16", "count": N_CLASSES}
+        # ── Write probability raster (float32, 9 bands) ──────────────────────
+        profile_prob = {**profile_class, "dtype": "float32", "count": N_CLASSES}
         with rasterio.open(prob_path, "w", **profile_prob) as dst:
-            dst.write(full_probs.astype(np.float16))
+            dst.write(full_probs.astype(np.float32))
             for i, name in enumerate(CLASSES):
                 dst.update_tags(i + 1, class_name=name)
         log.info("prob_raster_written", path=str(prob_path))
@@ -542,7 +542,8 @@ def run(
             missing += 1
             continue
 
-        if out_path.exists():
+        prob_path = out_dir / f"{year:04d}-{month:02d}_class_prob.tif"
+        if out_path.exists() and prob_path.exists():
             skipped += 1
             continue
 

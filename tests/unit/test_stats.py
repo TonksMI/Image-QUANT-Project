@@ -67,7 +67,7 @@ class TestBootstrapIcCi:
     def test_covers_known_mean(self):
         ic = pd.Series([0.04] * 36)
         lo, hi = bootstrap_ic_ci(ic, n_boot=500, ci=0.95)
-        assert lo <= 0.04 <= hi
+        assert lo <= 0.04 + 1e-10 and hi >= 0.04 - 1e-10
 
     def test_returns_two_floats(self):
         ic = pd.Series(np.arange(20, dtype=float))

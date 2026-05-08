@@ -49,13 +49,14 @@ class TestBuildForwardReturns:
         assert set(result.columns) == {"symbol", "date", "horizon", "fwd_return"}
 
     def test_compounding_two_periods(self):
-        """h=2 compound return should match (1+r1)*(1+r2)-1."""
+        """h=2 fwd_return(t) = compound of returns at t+1 and t+2."""
         r1, r2 = 0.02, 0.03
         dates = pd.date_range("2020-01-01", periods=4, freq="MS")
+        # fwd(dates[0], h=2) = compound of dates[1] and dates[2] returns
         df = pd.DataFrame([
-            {"date": dates[0], "symbol": "A", "monthly_ret": r1},
-            {"date": dates[1], "symbol": "A", "monthly_ret": r2},
-            {"date": dates[2], "symbol": "A", "monthly_ret": 0.01},
+            {"date": dates[0], "symbol": "A", "monthly_ret": 0.01},
+            {"date": dates[1], "symbol": "A", "monthly_ret": r1},
+            {"date": dates[2], "symbol": "A", "monthly_ret": r2},
             {"date": dates[3], "symbol": "A", "monthly_ret": 0.01},
         ])
         result = build_forward_returns(df, horizons=[2])
@@ -94,8 +95,8 @@ class TestBuildMomentumSignal:
         assert len(non_null) > 0
 
     def test_warm_up_nans_for_short_history(self):
+        # stack(dropna=True) drops warm-up NaN rows rather than keeping them,
+        # so check that fewer rows are returned than total input periods.
         df = _make_returns(n_periods=8, n_tickers=1)
         result = build_momentum_signal(df, window=12)
-        # With only 8 periods and window=12, should have some NaNs
-        null_count = result["feature_value"].isna().sum()
-        assert null_count > 0
+        assert len(result) < 8

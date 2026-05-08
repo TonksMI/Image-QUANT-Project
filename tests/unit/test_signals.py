@@ -90,7 +90,7 @@ class TestYoyChange:
         assert pd.isna(result.iloc[:12]).all()
 
     def test_value_at_12(self):
-        s = pd.Series(range(24), dtype=float)
+        s = pd.Series(range(1, 25), dtype=float)  # start at 1 so denominator != 0
         result = yoy_change(s)
         expected = (s.iloc[12] - s.iloc[0]) / s.iloc[0]
         assert abs(result.iloc[12] - expected) < 1e-10
