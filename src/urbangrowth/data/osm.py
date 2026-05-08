@@ -200,8 +200,14 @@ def compute_road_density(
     edges_4326["mid_lat"] = mid.y
     edges_4326["mid_lng"] = mid.x
 
+    def _to_cell(lat, lon, res):
+        try:
+            return h3.latlng_to_cell(lat, lon, res)
+        except AttributeError:
+            return h3.geo_to_h3(lat, lon, res)
+
     edges_4326["h3_index"] = edges_4326.apply(
-        lambda r: h3.geo_to_h3(r.mid_lat, r.mid_lng, resolution), axis=1
+        lambda r: _to_cell(r.mid_lat, r.mid_lng, resolution), axis=1
     )
 
     density_df = (
@@ -264,9 +270,12 @@ def _edges_to_4326(edges_utm: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 def _density_to_geodataframe(density_df: pd.DataFrame) -> gpd.GeoDataFrame:
     """Attach H3 polygon geometries to the density DataFrame."""
     def _h3_polygon(h3_index: str) -> Polygon:
-        boundary = h3.h3_to_geo_boundary(h3_index, geo_json=True)
-        # geo_json=True returns [lng, lat] pairs — Shapely expects (x, y) = (lng, lat)
-        return Polygon(boundary)
+        try:
+            coords = h3.cell_to_boundary(h3_index)   # 4.x: list of (lat,lng)
+            return Polygon([(lng, lat) for lat, lng in coords])
+        except AttributeError:
+            boundary = h3.h3_to_geo_boundary(h3_index, geo_json=True)
+            return Polygon(boundary)
 
     polygons = density_df["h3_index"].apply(_h3_polygon)
     gdf = gpd.GeoDataFrame(density_df.copy(), geometry=polygons, crs="EPSG:4326")
