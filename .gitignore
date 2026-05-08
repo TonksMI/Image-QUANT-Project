@@ -1,0 +1,43 @@
+# Environment / secrets — NEVER commit
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Data (large files live in C:\urbangrowth_data — not in repo)
+logs/
+*.log
+*.parquet
+*.tif
+*.tiff
+*.gpkg
+*.geojson
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb~
+
+# IDEs
+.vscode/
+.idea/
+*.code-workspace
+
+# Conda / venv
+.conda/
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

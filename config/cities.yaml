@@ -1,0 +1,47 @@
+# City-level urban growth configuration
+# bbox: [west, south, east, north] in EPSG:4326
+# utm_crs: local UTM for area math
+# h3_resolution: 8 (~0.74 km²) for city-wide, 9 (~0.1 km²) for parcel-level
+# sentinel2_tiles: Sentinel-2 MGRS tile IDs overlapping the bbox
+# ticker_basket: tickers with highest signal sensitivity to this city
+
+cities:
+  phoenix:
+    display_name: "Phoenix Metro (Maricopa County)"
+    state: AZ
+    state_fips: "04"
+    county_fips: ["04013"]          # Maricopa
+    place_fips: "0455000"           # Phoenix city
+    bbox: [-112.35, 33.20, -111.65, 33.85]
+    utm_crs: "EPSG:32612"           # UTM zone 12N
+    db_crs: "EPSG:4326"
+    h3_resolution_city: 8
+    h3_resolution_parcel: 9
+    sentinel2_tiles: ["T12SVC", "T12SVB"]
+    ticker_basket: [DHI, LEN, PHM, KBH, MDC, TMHC, CCS, EXP, VMC, URI, HEES, CMC, GVA, STRL]
+    data_portals:
+      open_data: "https://www.phoenixopendata.com/api/3/action/"
+      permits: "https://www.phoenixopendata.com/dataset/building-permits"
+      zoning: "https://www.phoenixopendata.com/dataset/zoning"
+      parcels: "https://mcassessor.maricopa.gov/"          # Maricopa County Assessor
+      county_gis: "https://www.maricopa.gov/3511/GIS-Data"
+
+  austin:
+    display_name: "Austin Metro (Travis / Williamson / Hays Counties)"
+    state: TX
+    state_fips: "48"
+    county_fips: ["48453", "48491", "48209"]   # Travis, Williamson, Hays
+    place_fips: "4805000"           # Austin city
+    bbox: [-97.98, 30.10, -97.40, 30.65]
+    utm_crs: "EPSG:32614"           # UTM zone 14N
+    db_crs: "EPSG:4326"
+    h3_resolution_city: 8
+    h3_resolution_parcel: 9
+    sentinel2_tiles: ["T14RNU", "T14RMU"]
+    ticker_basket: [DHI, LEN, PHM, TMHC, CCS, KBH, MLM, VMC, URI, STRL, ROAD, CMC, GVA]
+    data_portals:
+      open_data: "https://data.austintexas.gov/api/odata/v4/"
+      permits: "https://data.austintexas.gov/Building-and-Development/Issued-Construction-Permits/3syk-w9eu"
+      zoning: "https://data.austintexas.gov/Locations-and-Maps/Zoning-Profile/5rzy-nm5e"
+      parcels: "https://traviscad.org/appraisalrecords/"   # Travis CAD
+      county_gis: "https://www.traviscountytx.gov/gis"

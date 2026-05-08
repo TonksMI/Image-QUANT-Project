@@ -1,0 +1,346 @@
+# 50-stock construction/infrastructure equity universe
+#
+# sector_tag:
+#   electrical_infra   — T&D, utility construction, electrical contractors
+#   civil_construction — roads, bridges, site work, heavy civil, E&C/engineering
+#   materials          — aggregates, cement, lumber, building products distribution
+#   equipment          — heavy equipment OEM + rental
+#   steel              — steel mills, metals service centers
+#   homebuilder        — residential single/multi-family builders
+#   reit_industrial    — industrial/logistics REITs (construction demand proxy)
+#   reit_residential   — apartment/MFR REITs (housing supply proxy)
+#   regional_bank      — construction-lending banks (credit tightness signal)
+#   control            — benchmark ETFs for excess-return computation
+#
+# primary_signals: which alt-data signals are expected to predict this ticker
+#   ferc_queue         — FERC interconnection queue capacity additions/withdrawals
+#   usaspending        — federal construction contract award flow
+#   census_bps         — Census BPS permit counts (national + MSA)
+#   fred               — FRED macro series (HOUST, TTLCONS, MORTGAGE30US, etc.)
+#   city_growth_phoenix — satellite + permit growth in Phoenix metro
+#   city_growth_austin  — satellite + permit growth in Austin metro
+#   dot_tips           — state DOT TIP project awards (AZ + TX)
+#
+# geographic_concentration: estimated state-level revenue exposure (%), where known
+
+universe:
+
+  # ── HOMEBUILDERS ──────────────────────────────────────────────────────────
+
+  - symbol: DHI
+    name: "D.R. Horton"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 12, FL: 18, CA: 8, AZ: 8, GA: 6, NC: 5, CO: 4}
+
+  - symbol: LEN
+    name: "Lennar Corporation"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {FL: 22, TX: 16, CA: 10, CO: 5, AZ: 5, GA: 5}
+
+  - symbol: PHM
+    name: "PulteGroup"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 12, FL: 14, AZ: 9, CA: 8, NC: 6, SC: 5}
+
+  - symbol: NVR
+    name: "NVR Inc."
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {VA: 28, MD: 18, OH: 12, PA: 10, DC: 8, WV: 5}
+
+  - symbol: TOL
+    name: "Toll Brothers"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {PA: 20, NJ: 12, TX: 8, FL: 7, AZ: 6, CA: 6, MD: 5}
+
+  - symbol: KBH
+    name: "KB Home"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {CA: 30, TX: 22, AZ: 12, FL: 8, CO: 5, NV: 4}
+
+  - symbol: MDC
+    name: "MDC Holdings"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred, city_growth_phoenix]
+    geographic_concentration: {CO: 28, AZ: 18, FL: 12, TX: 10, MD: 8, UT: 5}
+
+  - symbol: MHO
+    name: "M/I Homes"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred, city_growth_austin]
+    geographic_concentration: {OH: 22, TX: 14, FL: 12, IN: 8, NC: 7, TN: 5}
+
+  - symbol: TMHC
+    name: "Taylor Morrison Home"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {AZ: 26, FL: 18, TX: 15, CA: 10, CO: 8, GA: 5}
+
+  - symbol: CCS
+    name: "Century Communities"
+    sector_tag: homebuilder
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 25, CO: 18, AZ: 12, GA: 8, FL: 7, NV: 5}
+
+  # ── ELECTRICAL INFRASTRUCTURE ─────────────────────────────────────────────
+
+  - symbol: PWR
+    name: "Quanta Services"
+    sector_tag: electrical_infra
+    primary_signals: [ferc_queue, usaspending, dot_tips, fred]
+    geographic_concentration: {TX: 18, CA: 15, FL: 8, OH: 6, GA: 5}
+
+  - symbol: EME
+    name: "EMCOR Group"
+    sector_tag: electrical_infra
+    primary_signals: [ferc_queue, usaspending, fred]
+    geographic_concentration: {TX: 12, CA: 15, FL: 8, NY: 7, VA: 5}
+
+  - symbol: MYR
+    name: "MYR Group"
+    sector_tag: electrical_infra
+    primary_signals: [ferc_queue, usaspending]
+    geographic_concentration: {TX: 15, FL: 10, CA: 12, IL: 8, CO: 6}
+
+  - symbol: PRIM
+    name: "Primoris Services"
+    sector_tag: electrical_infra
+    primary_signals: [ferc_queue, usaspending, dot_tips, city_growth_phoenix]
+    geographic_concentration: {TX: 20, CA: 15, AZ: 10, FL: 8, CO: 6}
+
+  - symbol: NVT
+    name: "nVent Electric"
+    sector_tag: electrical_infra
+    primary_signals: [ferc_queue, fred]
+    geographic_concentration: {nationwide: 100}
+
+  - symbol: FIX
+    name: "Comfort Systems USA"
+    sector_tag: electrical_infra
+    primary_signals: [usaspending, census_bps, fred, city_growth_austin]
+    geographic_concentration: {TX: 22, OH: 12, FL: 8, GA: 7, NC: 6}
+
+  - symbol: CARR
+    name: "Carrier Global"
+    sector_tag: electrical_infra
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {nationwide: 100}
+
+  # ── CIVIL CONSTRUCTION ────────────────────────────────────────────────────
+
+  - symbol: GVA
+    name: "Granite Construction"
+    sector_tag: civil_construction
+    primary_signals: [usaspending, dot_tips, fred]
+    geographic_concentration: {CA: 25, TX: 12, AZ: 8, WA: 7, CO: 6}
+
+  - symbol: STRL
+    name: "Sterling Infrastructure"
+    sector_tag: civil_construction
+    primary_signals: [usaspending, dot_tips, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 28, AZ: 15, CO: 10, NM: 8, FL: 7}
+
+  - symbol: ROAD
+    name: "Construction Partners"
+    sector_tag: civil_construction
+    primary_signals: [usaspending, dot_tips]
+    geographic_concentration: {AL: 20, FL: 15, GA: 12, TX: 10, SC: 8}
+
+  - symbol: J
+    name: "Jacobs Solutions"
+    sector_tag: civil_construction
+    primary_signals: [usaspending, ferc_queue, dot_tips]
+    geographic_concentration: {TX: 12, CA: 10, FL: 8, NY: 7, VA: 7}
+
+  - symbol: ACM
+    name: "AECOM"
+    sector_tag: civil_construction
+    primary_signals: [usaspending, ferc_queue, dot_tips]
+    geographic_concentration: {CA: 18, TX: 10, NY: 8, VA: 8, FL: 6}
+
+  - symbol: KBR
+    name: "KBR Inc."
+    sector_tag: civil_construction
+    primary_signals: [usaspending, ferc_queue]
+    geographic_concentration: {TX: 35, VA: 10, nationwide: 55}
+
+  # ── MATERIALS ─────────────────────────────────────────────────────────────
+
+  - symbol: VMC
+    name: "Vulcan Materials"
+    sector_tag: materials
+    primary_signals: [census_bps, usaspending, dot_tips, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 20, CA: 15, VA: 10, TN: 8, FL: 7, GA: 6}
+
+  - symbol: MLM
+    name: "Martin Marietta Materials"
+    sector_tag: materials
+    primary_signals: [census_bps, usaspending, dot_tips, fred, city_growth_austin]
+    geographic_concentration: {TX: 25, CO: 15, NC: 10, MD: 8, SC: 7, GA: 6}
+
+  - symbol: SUM
+    name: "Summit Materials"
+    sector_tag: materials
+    primary_signals: [census_bps, usaspending, dot_tips, fred]
+    geographic_concentration: {TX: 15, CO: 12, UT: 10, ID: 8, KS: 7}
+
+  - symbol: EXP
+    name: "Eagle Materials"
+    sector_tag: materials
+    primary_signals: [census_bps, fred, city_growth_phoenix]
+    geographic_concentration: {TX: 22, IL: 15, CA: 12, CO: 8, AZ: 7}
+
+  - symbol: BLDR
+    name: "Builders FirstSource"
+    sector_tag: materials
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 18, FL: 14, CA: 10, GA: 8, AZ: 7, NC: 6}
+
+  - symbol: CRH
+    name: "CRH plc"
+    sector_tag: materials
+    primary_signals: [census_bps, usaspending, dot_tips, fred]
+    geographic_concentration: {nationwide: 100}
+
+  - symbol: BECN
+    name: "Beacon Roofing Supply"
+    sector_tag: materials
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {TX: 14, FL: 12, CA: 10, OH: 7, GA: 6}
+
+  - symbol: FBIN
+    name: "Fortune Brands Innovations"
+    sector_tag: materials
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {nationwide: 100}
+
+  # ── EQUIPMENT & RENTAL ────────────────────────────────────────────────────
+
+  - symbol: CAT
+    name: "Caterpillar"
+    sector_tag: equipment
+    primary_signals: [census_bps, usaspending, fred]
+    geographic_concentration: {worldwide: 100}
+
+  - symbol: DE
+    name: "Deere & Company"
+    sector_tag: equipment
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {worldwide: 100}
+
+  - symbol: TEX
+    name: "Terex Corporation"
+    sector_tag: equipment
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {worldwide: 100}
+
+  - symbol: URI
+    name: "United Rentals"
+    sector_tag: equipment
+    primary_signals: [census_bps, usaspending, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 12, CA: 15, FL: 8, NY: 7, OH: 5}
+
+  - symbol: HEES
+    name: "H&E Equipment Services"
+    sector_tag: equipment
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 25, LA: 12, FL: 10, AL: 8, GA: 7, AZ: 6}
+
+  # ── STEEL & METALS ────────────────────────────────────────────────────────
+
+  - symbol: NUE
+    name: "Nucor Corporation"
+    sector_tag: steel
+    primary_signals: [census_bps, usaspending, fred]
+    geographic_concentration: {SC: 15, TX: 12, IN: 10, TN: 8, UT: 7, NC: 6}
+
+  - symbol: STLD
+    name: "Steel Dynamics"
+    sector_tag: steel
+    primary_signals: [census_bps, usaspending, fred]
+    geographic_concentration: {TX: 18, IN: 15, AZ: 8, WV: 8, AL: 6}
+
+  - symbol: CMC
+    name: "Commercial Metals Company"
+    sector_tag: steel
+    primary_signals: [census_bps, usaspending, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 28, AL: 12, SC: 10, NJ: 8, FL: 7, AZ: 6}
+
+  - symbol: RS
+    name: "Reliance Steel & Aluminum"
+    sector_tag: steel
+    primary_signals: [census_bps, usaspending, fred]
+    geographic_concentration: {CA: 20, TX: 12, OH: 8, FL: 7, WA: 5}
+
+  - symbol: WOR
+    name: "Worthington Enterprises"
+    sector_tag: steel
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {OH: 35, nationwide: 65}
+
+  # ── INDUSTRIAL REITs ──────────────────────────────────────────────────────
+
+  - symbol: PLD
+    name: "Prologis"
+    sector_tag: reit_industrial
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {CA: 28, TX: 12, PA: 8, IL: 7, OH: 7, FL: 6}
+
+  - symbol: STAG
+    name: "STAG Industrial"
+    sector_tag: reit_industrial
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {TX: 8, CA: 7, FL: 6, OH: 6, GA: 5, MI: 5}
+
+  - symbol: REXR
+    name: "Rexford Industrial Realty"
+    sector_tag: reit_industrial
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {CA: 98}
+
+  # ── RESIDENTIAL REITs ─────────────────────────────────────────────────────
+
+  - symbol: AVB
+    name: "AvalonBay Communities"
+    sector_tag: reit_residential
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {MA: 18, DC: 15, CA: 14, NY: 12, VA: 10, WA: 8}
+
+  - symbol: EQR
+    name: "Equity Residential"
+    sector_tag: reit_residential
+    primary_signals: [census_bps, fred]
+    geographic_concentration: {CA: 28, NY: 12, MA: 8, WA: 7, CO: 5}
+
+  - symbol: MAA
+    name: "Mid-America Apartment Communities"
+    sector_tag: reit_residential
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {TX: 18, FL: 14, GA: 12, NC: 8, TN: 6, AZ: 5}
+
+  # ── REGIONAL BANKS ────────────────────────────────────────────────────────
+
+  - symbol: EWBC
+    name: "East West Bancorp"
+    sector_tag: regional_bank
+    primary_signals: [census_bps, fred, city_growth_phoenix]
+    geographic_concentration: {CA: 55, TX: 12, NY: 8, WA: 6}
+
+  - symbol: BOKF
+    name: "BOK Financial"
+    sector_tag: regional_bank
+    primary_signals: [census_bps, fred, city_growth_phoenix, city_growth_austin]
+    geographic_concentration: {OK: 28, TX: 25, CO: 10, AZ: 8, NM: 6, AR: 5}
+
+  # ── CONTROL ───────────────────────────────────────────────────────────────
+
+  - symbol: XHB
+    name: "SPDR S&P Homebuilders ETF"
+    sector_tag: control
+    primary_signals: []
+    geographic_concentration: {diversified: 100}

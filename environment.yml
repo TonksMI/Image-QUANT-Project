@@ -1,0 +1,89 @@
+name: urbangrowth
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+
+  # ── Geospatial (all from conda-forge for consistent GDAL linkage on Windows)
+  - gdal>=3.8
+  - rasterio>=1.3
+  - rioxarray>=0.15
+  - xarray>=2024.1
+  - dask>=2024.1
+  - dask-geopandas>=0.3
+  - geopandas>=0.14
+  - shapely>=2.0
+  - pyproj>=3.6
+  - h3-py>=3.7
+
+  # ── Database
+  - psycopg2-binary>=2.9
+  - sqlalchemy>=2.0
+  - geoalchemy2>=0.14
+  - alembic>=1.12
+
+  # ── Data science
+  - pandas>=2.1
+  - numpy>=1.26
+  - scipy>=1.11
+  - statsmodels>=0.14
+  - scikit-learn>=1.3
+  - lightgbm>=4.1
+  - matplotlib>=3.8
+  - seaborn>=0.13
+
+  # ── HTTP / retry
+  - requests>=2.31
+  - aiohttp>=3.9
+  - httpx>=0.25
+  - tenacity>=8.2
+
+  # ── App framework / config
+  - typer>=0.9
+  - rich>=13.7
+  - structlog>=23.1
+  - pyyaml>=6.0
+  - python-dotenv>=1.0
+  - pydantic>=2.5
+
+  # ── Visualization / dashboard
+  - streamlit>=1.28
+  - plotly>=5.17
+  - pydeck>=0.8
+  - folium>=0.15
+
+  # ── Dev tooling
+  - jupyter>=1.0
+  - ipykernel>=6.0
+  - pytest>=7.4
+  - pytest-asyncio>=0.21
+  - ruff>=0.4
+  - mypy>=1.7
+  - pandas-datareader>=0.10
+
+  - pip:
+    # ── PyTorch nightly CUDA 12.8 (RTX 5070 Blackwell sm_120)
+    # Installed separately by 00_setup_env.sh — listed here for documentation:
+    #   pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+
+    # ── Remote sensing
+    - pystac-client>=0.7.5
+    - stackstac>=0.4.4
+    - planetary-computer>=1.0.0
+    - sentinelsat>=1.2.1
+
+    # ── Deep learning for segmentation
+    - segmentation-models-pytorch>=0.3.3
+    - timm>=1.0.0
+    - transformers>=4.40.0
+
+    # ── H3 high-perf (Rust — requires Rust toolchain on Windows if no wheel available)
+    - h3ronpy>=0.20.0
+
+    # ── Markets / macro
+    - yfinance>=0.2.37
+    - fredapi>=0.5.1
+
+    # ── Config
+    - pydantic-settings>=2.0.0

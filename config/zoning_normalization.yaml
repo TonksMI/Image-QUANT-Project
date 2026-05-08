@@ -1,0 +1,112 @@
+# Zoning normalization taxonomy
+# Maps raw zone code strings to one of 11 normalized categories.
+# The Python loader inverts this at load time: lookup[raw_code] -> category.
+#
+# Categories:
+#   residential_low   SF detached, large-lot, rural residential
+#   residential_med   townhomes, two-family, small-lot SF
+#   residential_high  apartments, multifamily 3+ units
+#   mixed_use         MX, TOD, PUD (transit-oriented or true mixed), DR, CS (ATX)
+#   commercial        retail, office, general commercial corridors
+#   industrial        light/heavy industrial, manufacturing, sand/gravel
+#   institutional     parking districts, civic, hospital, school zones
+#   open_space        parks, conservation, floodplain, open space
+#   agricultural      rural agricultural
+#   transportation    right-of-way, transit
+#   other             special/planned districts without a clear category, unknown
+
+phoenix:
+  residential_low:
+    - R1-6
+    - R1-8
+    - R1-10
+    - R1-18
+    - R1-35
+    - R1-43
+    - RE-24
+    - RE-35
+    - RE-43
+    - A-1          # rural residential / agricultural (city takes residential-low over agricultural)
+  residential_med:
+    - R-2
+    - PRD          # planned residential development (typically attached/townhome)
+  residential_high:
+    - R-3
+    - R-3A
+    - R-4
+    - R-4A
+    - R-5
+    - R-5A
+    - MURP         # mixed-use residential planned
+  mixed_use:
+    - PUD
+    - PD
+  commercial:
+    - C-O
+    - C-1
+    - C-2
+    - C-3
+  industrial:
+    - I-1
+    - I-2
+    - A-2          # heavy agricultural / industrial fringe
+    - S-1          # sand, gravel, and rock extraction
+  institutional:
+    - P-1          # off-street parking
+  open_space:
+    - OS
+  agricultural: []
+  transportation: []
+  other:
+    - SP
+
+austin:
+  residential_low:
+    - SF-1
+    - SF-2
+    - SF-3
+    - SF-4A
+    - SF-4B
+    - RR           # rural residential
+    - LA           # lake/rural area
+    - A            # family residence (older code)
+    - AG           # agricultural
+  residential_med:
+    - SF-5
+    - SF-6
+    - MH           # mobile home / manufactured housing
+  residential_high:
+    - MF-1
+    - MF-2
+    - MF-3
+    - MF-4
+    - MF-5
+    - MF-6
+  mixed_use:
+    - CS           # commercial services (Austin treats CS as mixed commercial/residential base)
+    - CS-1
+    - CBD          # central business district
+    - DMU          # downtown mixed use
+    - DR           # development reserve / downtown reserve
+    - W/LO         # warehouse / limited office
+  commercial:
+    - GR           # general retail-commercial services
+    - LR           # limited retail-commercial services
+    - L            # lake commercial
+    - GO           # general office
+    - MO           # major office
+    - NO           # neighborhood office
+    - CH           # commercial highway
+    - LO           # limited office
+  industrial:
+    - LI           # limited industrial
+    - MI           # major industrial
+    - IP           # industrial park
+  institutional:
+    - P            # public
+  open_space: []
+  agricultural: []
+  transportation: []
+  other:
+    - PDA          # planned development area
+    - TCAD         # Travis CAD placeholder / un-coded parcels

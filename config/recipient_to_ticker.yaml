@@ -1,0 +1,74 @@
+# Manual overrides: company name fragments → ticker symbol
+# Keys are ticker symbols; values are lists of lowercase name substrings.
+# match_recipient() does case-insensitive substring matching.
+
+mapping:
+  PWR:
+    - "quanta services"
+    - "mears group"
+    - "q3 contracting"
+    - "price gregory"
+
+  EME:
+    - "emcor"
+    - "mesa energy systems"
+    - "harbour mechanical"
+
+  FIX:
+    - "comfort systems"
+    - "airtron"
+    - "bcm engineers"
+
+  J:
+    - "jacobs engineering"
+    - "jacobs solutions"
+    - "ch2m"
+    - "ch2m hill"
+
+  ACM:
+    - "aecom"
+    - "urs corporation"
+    - "urs federal"
+    - "tishman construction"
+    - "aecom management services"
+
+  KBR:
+    - "kbr inc"
+    - "kbr government"
+    - "brown & root"
+
+  STRL:
+    - "sterling construction"
+    - "ralph l. wadsworth"
+    - "california engineering"
+
+  ROAD:
+    - "construction partners"
+    - "wire construction"
+
+  GVA:
+    - "granite construction"
+    - "layne christensen"
+
+  VMC:
+    - "vulcan materials"
+    - "vulcan construction"
+
+  MLM:
+    - "martin marietta"
+
+  CRH:
+    - "oldcastle"
+    - "ash grove cement"
+    - "apac"
+    - "crh americas"
+
+  BLDR:
+    - "builders firstsource"
+    - "pro build"
+
+# Exclusions: recipient name substrings that must NOT be matched to any ticker.
+# Prevents false positives where a common word appears in an unrelated company name.
+exclusions:
+  - "granite telecommunications"   # telecom company, NOT GVA (Granite Construction)
+  - "vulcan inc"                    # defense tech firm, NOT VMC (Vulcan Materials)

@@ -1,0 +1,119 @@
+# FRED series manifest for the Urban Growth Research Platform
+# Used by: src/urbangrowth/data/fred.py
+#
+# Fields per entry:
+#   series_id : FRED series identifier
+#   name      : human-readable description
+#   frequency : M (monthly) | W (weekly) | D (daily)
+#   category  : logical grouping used in signal construction
+
+fred_series:
+
+  construction_spending:
+    - series_id: TTLCONS
+      name: "Total Construction Spending"
+      frequency: M
+      category: construction_spending
+
+    - series_id: TLRESCONS
+      name: "Total Private Residential Construction Spending"
+      frequency: M
+      category: construction_spending
+
+    - series_id: PRRESCONS
+      name: "Private Residential Construction Spending"
+      frequency: M
+      category: construction_spending
+
+    - series_id: TLNRESCONS
+      name: "Total Private Nonresidential Construction Spending"
+      frequency: M
+      category: construction_spending
+
+    - series_id: PNRESCONS
+      name: "Private Nonresidential Construction Spending"
+      frequency: M
+      category: construction_spending
+
+    - series_id: MNFCTRCONS
+      name: "Manufacturing Construction Spending"
+      frequency: M
+      category: construction_spending
+
+    - series_id: PWRCONS
+      name: "Power Construction Spending"
+      frequency: M
+      category: construction_spending
+
+  permits_starts:
+    - series_id: PERMIT
+      name: "New Private Housing Units Authorized (Seasonally Adjusted)"
+      frequency: M
+      category: permits_starts
+
+    - series_id: PERMITNSA
+      name: "New Private Housing Units Authorized (Not Seasonally Adjusted)"
+      frequency: M
+      category: permits_starts
+
+    - series_id: HOUST
+      name: "Housing Starts: Total New Privately Owned"
+      frequency: M
+      category: permits_starts
+
+    - series_id: UNDCONS
+      name: "Housing Units Under Construction"
+      frequency: M
+      category: permits_starts
+
+    - series_id: COMPUTSA
+      name: "Total Housing Completions (Seasonally Adjusted)"
+      frequency: M
+      category: permits_starts
+
+  macro_controls:
+    - series_id: MORTGAGE30US
+      name: "30-Year Fixed Rate Mortgage Average"
+      frequency: W
+      category: macro_controls
+
+    - series_id: FEDFUNDS
+      name: "Effective Federal Funds Rate"
+      frequency: M
+      category: macro_controls
+
+    - series_id: T10Y2Y
+      name: "10-Year Treasury Minus 2-Year Treasury (Yield Curve)"
+      frequency: D
+      category: macro_controls
+
+    - series_id: DGS10
+      name: "10-Year Treasury Constant Maturity Rate"
+      frequency: D
+      category: macro_controls
+
+    - series_id: INDPRO
+      name: "Industrial Production Index"
+      frequency: M
+      category: macro_controls
+
+    - series_id: PAYEMS
+      name: "Total Nonfarm Payrolls"
+      frequency: M
+      category: macro_controls
+
+  materials_prices:
+    - series_id: PCU3273273
+      name: "PPI: Cement and Concrete Products"
+      frequency: M
+      category: materials_prices
+
+    - series_id: WPU0811
+      name: "PPI: Lumber and Wood Products"
+      frequency: M
+      category: materials_prices
+
+    - series_id: WPU101
+      name: "PPI: Iron and Steel"
+      frequency: M
+      category: materials_prices

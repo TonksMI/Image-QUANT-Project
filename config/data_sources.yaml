@@ -1,0 +1,93 @@
+# API endpoints and credential environment variable names
+# Set these env vars in a .env file at project root (never commit credentials)
+
+census_bps:
+  base_url: "https://www.census.gov/construction/bps/csv/"
+  api_url: "https://api.census.gov/data"
+  credentials:
+    api_key_env: CENSUS_API_KEY       # register at api.census.gov/data/key_signup.html
+  series:
+    monthly_national: "bps_national_ann_all.csv"
+    monthly_metro: "bps_metro_ann_all.csv"
+    monthly_county: "bps_county_ann_all.csv"
+
+ferc_queue:
+  # FERC publishes the Active Interconnection Requests as Excel/CSV
+  base_url: "https://www.ferc.gov/industries-data/electric/power-sales-and-markets/electric-queues"
+  download_url: "https://www.ferc.gov/sites/default/files/2024-09/electric-queues.xlsx"
+  credentials: {}                     # no auth required
+
+usaspending:
+  base_url: "https://api.usaspending.gov/api/v2"
+  credentials: {}                     # no auth required; 10 req/s limit unauthenticated
+  endpoints:
+    awards: "/awards/"
+    spending_by_award: "/search/spending_by_award/"
+    recipient: "/recipient/"
+  naics_codes:                        # construction/infrastructure NAICS
+    - "2361"   # residential building construction
+    - "2362"   # nonresidential building construction
+    - "2371"   # utility system construction
+    - "2372"   # land subdivision
+    - "2379"   # other heavy construction
+    - "2381"   # foundation/structure/building exterior
+    - "2382"   # building equipment contractors
+    - "2383"   # building finishing contractors
+
+fred:
+  base_url: "https://api.stlouisfed.org/fred"
+  credentials:
+    api_key_env: FRED_API_KEY         # register at fred.stlouisfed.org/docs/api/api_key.html
+  series:
+    # Construction spending (FRED series IDs)
+    - {id: TTLCONS,   name: "Total Construction Spending"}
+    - {id: PRRESCON,  name: "Private Residential Construction"}
+    - {id: PNRESCON,  name: "Private Nonresidential Construction"}
+    - {id: TLPBLCONS, name: "Total Public Construction"}
+    - {id: HOUST,     name: "Housing Starts Total"}
+    - {id: PERMIT,    name: "New Private Housing Units Authorized"}
+    - {id: HSN1F,     name: "New One-Family Houses Sold"}
+    - {id: CSUSHPINSA,name: "Case-Shiller National HPI"}
+    - {id: MORTGAGE30US, name: "30-Year Fixed Mortgage Rate"}
+    - {id: T10YIE,    name: "10-Year Breakeven Inflation"}
+    - {id: UNRATE,    name: "Unemployment Rate"}
+    - {id: CPILFESL,  name: "Core CPI"}
+    - {id: DPCERA3M086SBEA, name: "PCE Real Personal Consumption"}
+
+dot_tips:
+  # State DOT Transportation Improvement Programs
+  arizona:
+    name: "ADOT Statewide TIP"
+    url: "https://adot.gov/programs/transportation-improvement-program"
+    format: pdf_manual               # manual download — no public API
+  texas:
+    name: "TxDOT STIP"
+    url: "https://www.txdot.gov/inside-txdot/division/transportation-planning/stip.html"
+    format: pdf_manual
+
+sentinel2:
+  # Microsoft Planetary Computer STAC API (free, no key required for public collections)
+  stac_url: "https://planetarycomputer.microsoft.com/api/stac/v1"
+  collection: "sentinel-2-l2a"
+  credentials: {}                    # PC uses SAS tokens, fetched automatically by planetary-computer lib
+  cloud_cover_max: 20                # % cloud cover filter
+  bands: [B02, B03, B04, B08, B11, B12]   # Blue, Green, Red, NIR, SWIR1, SWIR2
+
+elevation:
+  # USGS National Map API (3DEP)
+  usgs_tnm_url: "https://tnmapi.cr.usgs.gov/api/products"
+  credentials: {}
+  datasets:
+    - "Digital Elevation Model (DEM) 1 meter"
+    - "Digital Elevation Model (DEM) 1/3 arc-second"
+
+osm:
+  overpass_url: "https://overpass-api.de/api/interpreter"
+  credentials: {}                    # rate limit: ~10k chars/s; use sparingly
+  geofabrik_url: "https://download.geofabrik.de/north-america/us"
+
+markets:
+  provider: yfinance                 # no API key needed
+  credentials: {}
+  interval: "1mo"
+  adjusted: true

@@ -1,0 +1,68 @@
+# Pipeline date ranges, paths, and model configuration
+# All paths use forward slashes and are relative to data_root unless absolute
+
+data_root: "C:/urbangrowth_data"          # override with env var URBANGROWTH_DATA_ROOT
+log_dir: "C:/Users/17ton/urbangrowth/logs"
+
+dates:
+  history_start: "2015-01-01"
+  sentinel2_start: "2017-03-01"           # Sentinel-2A+B both operational
+  backtest_start: "2018-01-01"
+  end: "2026-05-01"                       # rolling — update to today in code
+
+h3:
+  resolution_regional: 7                  # ~5.16 km² — metro-level aggregations
+  resolution_city: 8                      # ~0.74 km² — neighborhood-level
+  resolution_parcel: 9                    # ~0.10 km² — parcel-level detail
+
+modeling:
+  return_horizons: [1, 3, 6, 12]          # months ahead to predict
+  ic_significance_threshold: 0.05
+  min_obs_for_ic: 24                      # months
+  cross_section_min_stocks: 20
+  backtest_long_pct: 0.2                  # top 20% long
+  backtest_short_pct: 0.2                 # bottom 20% short
+  transaction_cost_bps: 10
+  model_dir: "C:/urbangrowth_data/models"
+
+raster:
+  resampling: "bilinear"
+  output_crs: "EPSG:4326"
+  dask_chunks:
+    x: 2048
+    y: 2048
+    time: 1
+
+db:
+  host: "localhost"
+  port: 5432
+  dbname: "urbangrowth"
+  user_env: POSTGRES_USER               # env var
+  password_env: POSTGRES_PASSWORD       # env var
+
+raw_data_subdirs:
+  census_bps: "raw/census_bps"
+  ferc_queue: "raw/ferc_queue"
+  usaspending: "raw/usaspending"
+  fred: "raw/fred"
+  sentinel2: "raw/sentinel2"
+  elevation: "raw/elevation"
+  osm: "raw/osm"
+  city_permits:
+    phoenix: "raw/city_permits/phoenix"
+    austin:  "raw/city_permits/austin"
+  parcels:
+    phoenix: "raw/parcels/phoenix"
+    austin:  "raw/parcels/austin"
+  zoning:
+    phoenix: "raw/zoning/phoenix"
+    austin:  "raw/zoning/austin"
+  markets: "raw/markets"
+
+processed_data_subdirs:
+  composites: "processed/composites"
+  land_cover: "processed/land_cover"
+  change:     "processed/change"
+  h3_features: "processed/h3_features"
+  signal_tables: "processed/signals"
+  feature_tables: "processed/features"
