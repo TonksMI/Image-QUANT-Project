@@ -331,14 +331,11 @@ def run(city: str = "phoenix", year: int = 2022) -> None:
     )
 
     # ── Save GeoPackage ───────────────────────────────────────────────────────
-    merged_gdf.to_file(gpkg_path, driver="GPKG", layer="block_groups")
-    log.info(
-        "gpkg_saved",
-        city=city,
-        year=year,
-        rows=len(merged_gdf),
-        path=str(gpkg_path),
-    )
+    try:
+        merged_gdf.to_file(gpkg_path, driver="GPKG", layer="block_groups")
+        log.info("gpkg_saved", city=city, year=year, rows=len(merged_gdf), path=str(gpkg_path))
+    except Exception as exc:
+        log.warning("gpkg_skipped", city=city, year=year, error=str(exc))
 
     log.info(
         "census_acs_run_complete",

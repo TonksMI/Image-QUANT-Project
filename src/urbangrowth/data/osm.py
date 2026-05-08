@@ -73,7 +73,7 @@ def fetch_drive_network(bbox: list[float], utm_crs: str) -> gpd.GeoDataFrame:
     log.info("osm_downloading_network", bbox=bbox)
     t0 = time.perf_counter()
     G = ox.graph_from_bbox(
-        north, south, east, west, network_type="drive", retain_all=False
+        (west, south, east, north), network_type="drive", retain_all=False
     )
     nodes, edges = ox.graph_to_gdfs(G)
     elapsed = time.perf_counter() - t0
@@ -103,9 +103,8 @@ def fetch_buildings(bbox: list[float]) -> gpd.GeoDataFrame:
     west, south, east, north = bbox[0], bbox[1], bbox[2], bbox[3]
 
     log.info("osm_downloading_buildings", bbox=bbox)
-    buildings = ox.geometries_from_bbox(
-        north, south, east, west, tags={"building": True}
-    )
+    _geom_fn = getattr(ox, "features_from_bbox", getattr(ox, "geometries_from_bbox", None))
+    buildings = _geom_fn((west, south, east, north), tags={"building": True})
 
     buildings = buildings[
         buildings.geometry.geom_type.isin(["Polygon", "MultiPolygon"])
@@ -142,11 +141,9 @@ def fetch_pois(bbox: list[float]) -> gpd.GeoDataFrame:
     west, south, east, north = bbox[0], bbox[1], bbox[2], bbox[3]
 
     log.info("osm_downloading_pois", bbox=bbox)
-    pois = ox.geometries_from_bbox(
-        north,
-        south,
-        east,
-        west,
+    _geom_fn = getattr(ox, "features_from_bbox", getattr(ox, "geometries_from_bbox", None))
+    pois = _geom_fn(
+        (west, south, east, north),
         tags={
             "landuse": ["commercial", "industrial", "retail", "warehouse"],
             "amenity": ["marketplace", "bank", "restaurant", "fast_food", "fuel"],

@@ -20,6 +20,7 @@ import structlog
 import yaml
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -36,7 +37,7 @@ _BASE_URL = "https://api.usaspending.gov/api/v2"
 _ENDPOINT = "/search/spending_by_award/"
 _RATE_LIMIT_SLEEP = 0.10  # seconds between requests (~10 req/s)
 
-NAICS_PREFIXES: list[str] = ["236", "237", "238"]
+NAICS_PREFIXES: list[str] = ["23"]  # 2-digit construction sector; USASpending requires 2, 4, or 6 digit codes
 
 # All contract award type codes
 _CONTRACT_CODES: list[str] = ["A", "B", "C", "D"]
@@ -136,16 +137,20 @@ def match_recipient(
 
 
 def _build_naics_list(prefixes: list[str]) -> list[str]:
-    """Expand 3-digit NAICS prefixes to all 4-digit codes (prefix + 0–9)."""
-    codes: list[str] = []
-    for prefix in prefixes:
-        for digit in range(10):
-            codes.append(f"{prefix}{digit}")
-    return codes
+    """Return 3-digit NAICS prefix codes; USASpending API does prefix matching."""
+    return list(prefixes)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+        return True
+    if isinstance(exc, requests.HTTPError):
+        return exc.response is not None and exc.response.status_code >= 500
+    return False
 
 
 @retry(
-    retry=retry_if_exception_type(requests.HTTPError),
+    retry=retry_if_exception(_is_retryable),
     wait=wait_exponential(multiplier=1, min=2, max=60),
     stop=stop_after_attempt(5),
     reraise=True,
@@ -165,11 +170,11 @@ def search_awards_page(
     payload = {
         "filters": {
             "award_type_codes": _CONTRACT_CODES,
-            "naics_codes": naics_list,
+            "naics_codes": {"require": naics_list},
             "time_period": [{"start_date": start_date, "end_date": end_date}],
         },
         "fields": _FIELDS,
-        "sort": "Action Date",
+        "sort": "Award ID",
         "order": "desc",
         "limit": limit,
         "page": page,
@@ -179,6 +184,8 @@ def search_awards_page(
     log.debug("usaspending_request", url=url, page=page, naics_count=len(naics_list))
 
     resp = requests.post(url, json=payload, timeout=60)
+    if not resp.ok:
+        log.error("usaspending_api_error", status=resp.status_code, body=resp.text[:500])
     resp.raise_for_status()
     time.sleep(_RATE_LIMIT_SLEEP)
     return resp.json()
@@ -247,7 +254,8 @@ def _records_to_df(
     )
 
     # Type coercions
-    df["award_date"] = pd.to_datetime(df["award_date"], errors="coerce").dt.date
+    _dates = pd.to_datetime(df["award_date"], errors="coerce")
+    df["award_date"] = [d.date() if pd.notna(d) else None for d in _dates]
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
     df["naics"] = df["naics"].astype(str).where(df["naics"].notna())
 
@@ -384,6 +392,17 @@ def run(start: str = "2015-01", end: str = "2025-12") -> None:
         if df.empty:
             log.info("usaspending_empty_month", year=year, month=month)
             continue
+
+        # Coerce NaT → None so PostgreSQL receives NULL, not the string "NaT"
+        for col in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
+            df[col] = df[col].where(df[col].notna(), other=None)
+        if "award_date" in df.columns:
+            df["award_date"] = [
+                v.date() if hasattr(v, "date") and pd.notna(v) else (None if pd.isna(v) else v)
+                for v in df["award_date"]
+            ]
+
+        df = df.drop_duplicates(subset=["award_id"])
 
         # Upsert to DB
         loaders.upsert_df(df, "usaspending_awards", ["award_id"])
