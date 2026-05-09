@@ -82,6 +82,7 @@ _OUTPUT_COLS = [
     "snapshot_date",
     "project_id",
     "iso",
+    "region",        # alias of iso kept for backward-compat with signal queries
     "project_name",
     "state",
     "county",
@@ -158,7 +159,15 @@ def _safe_date(val: object) -> Optional[date]:
     text = str(val).strip()
     if not text or text.lower() in ("nan", "nat", "none", "n/a", "tbd", "-"):
         return None
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%d-%b-%Y", "%b-%Y"):
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",  # CAISO: "2003-11-18 08:00:00"
+        "%Y-%m-%d",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%Y/%m/%d",
+        "%d-%b-%Y",
+        "%b-%Y",
+    ):
         try:
             return datetime.strptime(text, fmt).date()
         except ValueError:
@@ -176,6 +185,34 @@ def _safe_float(val: object) -> Optional[float]:
         return None
 
 
+_SSL_SKIP_HOSTS: set[str] = {"www.spp.org", "spp.org"}
+
+
+def _make_session(verify: bool = True) -> requests.Session:
+    """Build a requests Session; for legacy-TLS hosts use a permissive adapter."""
+    session = requests.Session()
+    if not verify:
+        import ssl
+        import urllib3
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.ssl_ import create_urllib3_context
+
+        ctx = create_urllib3_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+        ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
+
+        class _LegacyAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                kwargs["ssl_context"] = ctx
+                super().init_poolmanager(*args, **kwargs)
+
+        session.mount("https://", _LegacyAdapter())
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    return session
+
+
 @retry(
     retry=retry_if_exception_type(requests.exceptions.RequestException),
     stop=stop_after_attempt(3),
@@ -184,7 +221,11 @@ def _safe_float(val: object) -> Optional[float]:
 )
 def _get(url: str, stream: bool = False) -> requests.Response:
     """GET with retry logic and standard headers."""
-    resp = requests.get(url, headers=_HEADERS, timeout=120, stream=stream)
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ""
+    verify = host not in _SSL_SKIP_HOSTS
+    session = _make_session(verify=verify)
+    resp = session.get(url, headers=_HEADERS, timeout=120, stream=stream, verify=verify)
     resp.raise_for_status()
     return resp
 
@@ -230,6 +271,8 @@ class ISOScraper(ABC):
             ext = "csv"
         elif url_lower.endswith(".zip"):
             ext = "zip"
+        elif url_lower.endswith(".xls"):
+            ext = "xls"
 
         dest = self._cache_path(ext)
         if dest.exists():
@@ -293,6 +336,7 @@ class ISOScraper(ABC):
             "snapshot_date": self.snapshot_date,
             "project_id": f"{self.iso_name}_{str(project_id).strip()}",
             "iso": self.iso_name,
+            "region": self.iso_name,   # kept for backward-compat with signal queries
             "project_name": str(project_name).strip() if pd.notna(project_name) else "",
             "state": str(state).strip().upper()[:2] if pd.notna(state) else "",
             "county": str(county).strip() if pd.notna(county) else "",
@@ -316,14 +360,12 @@ class PJMScraper(ISOScraper):
     iso_name = "pjm"
 
     def get_download_url(self) -> str:
-        return (
-            "https://www.pjm.com/-/media/planning/project-connect/"
-            "pjm_project_connect_queue.ashx"
-        )
+        return "https://pjm.com/pub/planning/iq_queues/xcl_queue.xls"
 
     def parse(self, path: Path) -> pd.DataFrame:
         # PJM publishes a multi-sheet workbook; find the "queue" sheet
-        xl = pd.ExcelFile(path, engine="openpyxl")
+        engine = "xlrd" if path.suffix.lower() == ".xls" else "openpyxl"
+        xl = pd.ExcelFile(path, engine=engine)
         sheet = next(
             (s for s in xl.sheet_names if "queue" in s.lower()),
             xl.sheet_names[0],
@@ -509,13 +551,11 @@ class CAISOScraper(ISOScraper):
     iso_name = "caiso"
 
     def get_download_url(self) -> str:
-        return (
-            "https://www.caiso.com/Documents/"
-            "GeneratorInterconnectionandInteroperabilityQueue.xlsx"
-        )
+        # URL updated 2026-05; old path 404'd after CAISO website restructure
+        return "https://www.caiso.com/documents/publicqueuereport.xlsx"
 
     def parse(self, path: Path) -> pd.DataFrame:
-        # CAISO workbook may have multiple sheets; pick the first with data
+        # CAISO workbook: "Grid GenerationQueue" sheet; header is on row 3 (0-indexed)
         xl = pd.ExcelFile(path, engine="openpyxl")
         sheet = xl.sheet_names[0]
         for s in xl.sheet_names:
@@ -523,20 +563,23 @@ class CAISOScraper(ISOScraper):
                 sheet = s
                 break
 
-        df = pd.read_excel(xl, sheet_name=sheet, dtype=str)
-        df.columns = [str(c).strip() for c in df.columns]
+        # header=3 skips the 3 preamble/merged-header rows above the real column row
+        df = pd.read_excel(xl, sheet_name=sheet, header=3, dtype=str)
+        df.columns = [str(c).strip().replace("\n", " ") for c in df.columns]
         df = df.dropna(how="all")
 
         cols = list(df.columns)
-        id_col = _find_col(cols, ["application no", "queue no", "project id", "id"])
+        id_col   = _find_col(cols, ["queue position", "application no", "queue no", "project id"])
         name_col = _find_col(cols, ["project name", "applicant name", "name"])
-        state_col = _find_col(cols, ["state"])
-        county_col = _find_col(cols, ["county", "jurisdiction"])
-        mw_col = _find_col(cols, ["mw", "capacity", "net mw"])
-        fuel_col = _find_col(cols, ["technology", "fuel", "resource", "type"])
-        status_col = _find_col(cols, ["status"])
-        qdate_col = _find_col(cols, ["application date", "queue date", "received", "entered"])
-        inservice_col = _find_col(cols, ["in-service", "in service", "on-line", "cod"])
+        state_col   = _find_col(cols, ["state"])
+        county_col  = _find_col(cols, ["county", "jurisdiction"])
+        mw_col      = _find_col(cols, ["net mws to grid", "net mw", "mw-1", "mw", "capacity"])
+        fuel_col    = _find_col(cols, ["fuel-1", "type-1", "technology", "fuel", "resource"])
+        status_col  = _find_col(cols, ["application status", "status"])
+        qdate_col   = _find_col(cols, ["queue date", "application date", "received", "entered"])
+        inservice_col = _find_col(cols, ["current  on-line date", "current on-line date",
+                                          "proposed  on-line date", "proposed on-line date",
+                                          "in-service", "in service", "on-line", "cod"])
 
         rows = []
         for _, row in df.iterrows():

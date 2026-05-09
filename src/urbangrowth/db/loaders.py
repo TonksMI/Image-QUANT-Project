@@ -8,6 +8,9 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import pandas as pd
 import sqlalchemy as sa
 import structlog

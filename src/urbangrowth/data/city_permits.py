@@ -459,15 +459,15 @@ def _normalise_austin_row(row: dict) -> dict:
     issue_date = _pick("issue_date") or _pick("issued_date")
 
     return {
-        "permit_number":       _pick("permitnum"),
+        "permit_number":       _pick("permit_number", "permitnum"),
         "issue_date":          issue_date,
         "permit_type":         _normalise_permit_type(raw_type),
         "work_description":    _pick("description"),
         "address":             _pick("original_address1"),
         "zip_code":            _pick("original_zip"),
-        "estimated_value_usd": _to_float("total_valuation"),
-        "sq_ft":               _to_float("total_sq_ft"),
-        "units":               _to_float("units"),
+        "estimated_value_usd": _to_float("total_valuation", "valuation_amount"),
+        "sq_ft":               _to_float("total_sq_ft", "square_feet"),
+        "units":               _to_float("units", "unit_count"),
         "latitude":            lat,
         "longitude":           lon,
     }
@@ -660,55 +660,78 @@ def _save_monthly_cache(df: pd.DataFrame, city: str) -> int:
 # ---------------------------------------------------------------------------
 
 def _upsert_permits(df: pd.DataFrame, city: str) -> None:
-    """Build a GeoDataFrame and upsert to the city_permits table."""
+    """Upsert permits to the city_permits table (PostGIS-optional)."""
     import sqlalchemy as sa
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     city_id = CITY_IDS[city]
 
-    # Build geometry column (Point from lon, lat)
-    def _make_geom(row: pd.Series):
-        lat = row.get("latitude")
-        lon = row.get("longitude")
-        if pd.isna(lat) or pd.isna(lon):
-            return None
-        return Point(lon, lat)
-
-    df = df.copy()
-    df["geometry"] = df.apply(_make_geom, axis=1)
-
-    # Map to DB schema columns
     db_df = pd.DataFrame({
         "permit_id":  df["permit_number"],
         "city_id":    city_id,
         "issue_date": df["issue_date"],
         "type":       df["permit_type"],
         "valuation":  df["estimated_value_usd"],
-        "geometry":   df["geometry"],
+        "lat":        df["latitude"],
+        "lon":        df["longitude"],
     })
-
-    # Drop rows with no permit_id
     db_df = db_df[db_df["permit_id"].notna() & (db_df["permit_id"] != "")].copy()
-
-    gdf = gpd.GeoDataFrame(db_df, geometry="geometry", crs="EPSG:4326")
 
     pipeline = get_pipeline()
     user = os.environ.get("POSTGRES_USER", "urbangrowth")
     pwd  = os.environ.get("POSTGRES_PASSWORD", "")
     host = pipeline["db"]["host"]
     port = pipeline["db"]["port"]
-    db   = pipeline["db"]["dbname"]
+    dbname = pipeline["db"]["dbname"]
     engine = sa.create_engine(
-        f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{db}",
+        f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{dbname}",
         pool_pre_ping=True,
     )
 
-    gdf.to_postgis(
-        "city_permits",
-        engine,
-        if_exists="append",
-        index=False,
-    )
-    log.info("city_permits_upserted", city=city, rows=len(gdf))
+    # Ensure table exists and has lat/lon columns (PostGIS-optional)
+    with engine.begin() as conn:
+        conn.execute(sa.text("""
+            CREATE TABLE IF NOT EXISTS city_permits (
+                permit_id   TEXT    NOT NULL,
+                city_id     INTEGER NOT NULL,
+                issue_date  DATE,
+                type        TEXT,
+                valuation   FLOAT,
+                lat         FLOAT,
+                lon         FLOAT,
+                PRIMARY KEY (permit_id, city_id)
+            )
+        """))
+        conn.execute(sa.text("ALTER TABLE city_permits ADD COLUMN IF NOT EXISTS lat FLOAT"))
+        conn.execute(sa.text("ALTER TABLE city_permits ADD COLUMN IF NOT EXISTS lon FLOAT"))
+
+    upsert_sql = sa.text("""
+        INSERT INTO city_permits (permit_id, city_id, issue_date, type, valuation, lat, lon)
+        VALUES (:permit_id, :city_id, :issue_date, :type, :valuation, :lat, :lon)
+        ON CONFLICT (permit_id, city_id) DO UPDATE SET
+            issue_date = EXCLUDED.issue_date,
+            type       = EXCLUDED.type,
+            valuation  = EXCLUDED.valuation,
+            lat        = EXCLUDED.lat,
+            lon        = EXCLUDED.lon
+    """)
+
+    def _clean(v):
+        if isinstance(v, float) and (v != v):  # NaN check
+            return None
+        return v
+
+    rows = [
+        {k: _clean(v) for k, v in rec.items()}
+        for rec in db_df.to_dict("records")
+    ]
+
+    CHUNK = 500
+    with engine.begin() as conn:
+        for i in range(0, len(rows), CHUNK):
+            conn.execute(upsert_sql, rows[i:i + CHUNK])
+
+    log.info("city_permits_upserted", city=city, rows=len(db_df))
 
 
 # ---------------------------------------------------------------------------
