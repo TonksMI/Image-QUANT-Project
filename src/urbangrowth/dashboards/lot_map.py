@@ -119,6 +119,8 @@ def build_lot_map(city_name: str, engine) -> Path:
         zone  = row.get("zoning_category") or "unknown"
         acres = row.get("acreage_est")
         addr  = row.get("nearest_address") or ""
+        if addr in ("NaN", "nan", "None"):
+            addr = ""
         ptype = row.get("dominant_property_type") or "unknown"
         lval  = row.get("est_land_value_acre")
         cmons = row.get("est_construction_months")

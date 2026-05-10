@@ -117,23 +117,71 @@ CONSTRUCTION_COST_PER_SQFT: dict[str, float] = {
     "unknown":       180.0,
 }
 
-# Land value per acre estimates by distance ring (USD/acre, 2024 metro medians)
-# Austin: Travis CAD median land values by submarket
-# Phoenix: Maricopa County median land values by submarket
-_LAND_VALUE_CURVE = {
+# ── Multi-anchor land value model ────────────────────────────────────────────
+# Land value is driven by proximity to multiple attractors, not just the CBD.
+# Each city defines a list of value anchors: (lat, lon, base_value, decay_km).
+#   base_value: $/acre at the anchor centroid
+#   decay_km:   distance at which value falls to base_value/e (~37%)
+#
+# The estimated land value for a cell is the MAX across all anchor estimates,
+# because value reflects whichever attractor you're closest to.
+#
+# Sources: Travis CAD medians, Maricopa County medians, CoStar submarket data
+_CITY_VALUE_ANCHORS: dict[str, list[dict]] = {
     "austin": [
-        (0,   5,  1_800_000),  # urban core
-        (5,   12, 600_000),    # inner suburbs
-        (12,  25, 250_000),    # outer suburbs
-        (25,  40, 120_000),    # fringe
-        (40, 999,  50_000),    # exurbs
+        # CBD / 6th Street core
+        {"lat": 30.2672, "lon": -97.7431, "base": 1_800_000, "decay_km": 4.0},
+        # South Congress / SoCo corridor
+        {"lat": 30.2435, "lon": -97.7502, "base": 800_000,   "decay_km": 3.5},
+        # Domain / North Austin tech corridor
+        {"lat": 30.4013, "lon": -97.7211, "base": 700_000,   "decay_km": 5.0},
+        # East Austin / Mueller redevelopment
+        {"lat": 30.3001, "lon": -97.7100, "base": 600_000,   "decay_km": 3.0},
+        # Round Rock / Georgetown fringe (distant but growing)
+        {"lat": 30.5086, "lon": -97.6789, "base": 200_000,   "decay_km": 6.0},
+        # South Austin / Buda fringe
+        {"lat": 30.0850, "lon": -97.8406, "base": 180_000,   "decay_km": 5.0},
+        # Cedar Park / Leander fringe (NW corridor)
+        {"lat": 30.5052, "lon": -97.8203, "base": 250_000,   "decay_km": 5.0},
+        # Baseline rural floor (exurbs)
+        {"lat": 30.2672, "lon": -97.7431, "base": 50_000,    "decay_km": 999.0},
     ],
     "phoenix": [
-        (0,   8,  800_000),
-        (8,   20, 300_000),
-        (20,  35, 150_000),
-        (35,  55,  80_000),
-        (55, 999,  35_000),
+        # CBD core
+        {"lat": 33.4484, "lon": -112.0740, "base": 800_000,  "decay_km": 5.0},
+        # Scottsdale / Old Town high-value corridor
+        {"lat": 33.4942, "lon": -111.9261, "base": 600_000,  "decay_km": 5.0},
+        # Tempe / ASU area
+        {"lat": 33.4255, "lon": -111.9400, "base": 450_000,  "decay_km": 4.0},
+        # Chandler tech corridor (Intel, TSMC)
+        {"lat": 33.3062, "lon": -111.8413, "base": 400_000,  "decay_km": 6.0},
+        # Mesa / Gilbert growing fringe
+        {"lat": 33.3528, "lon": -111.7890, "base": 300_000,  "decay_km": 6.0},
+        # Peoria / Surprise NW growth corridor
+        {"lat": 33.5806, "lon": -112.2374, "base": 250_000,  "decay_km": 7.0},
+        # Goodyear / Avondale SW industrial/residential
+        {"lat": 33.4353, "lon": -112.3576, "base": 220_000,  "decay_km": 6.0},
+        # Baseline rural floor (exurbs)
+        {"lat": 33.4484, "lon": -112.0740, "base": 35_000,   "decay_km": 999.0},
+    ],
+    # Template for future expansion — LA shows coast + canyon + employment anchors
+    "los_angeles": [
+        # Santa Monica / coastal premium
+        {"lat": 34.0195, "lon": -118.4912, "base": 8_000_000, "decay_km": 3.0},
+        # Beverly Hills / Westside core
+        {"lat": 34.0736, "lon": -118.4004, "base": 5_000_000, "decay_km": 4.0},
+        # Downtown LA employment
+        {"lat": 34.0522, "lon": -118.2437, "base": 2_000_000, "decay_km": 5.0},
+        # Hollywood / Silverlake urban
+        {"lat": 34.0928, "lon": -118.3287, "base": 1_500_000, "decay_km": 3.5},
+        # Culver City / tech corridor (Amazon, Apple)
+        {"lat": 34.0211, "lon": -118.3965, "base": 2_500_000, "decay_km": 3.0},
+        # San Fernando Valley (Burbank, NoHo)
+        {"lat": 34.1808, "lon": -118.3090, "base": 1_000_000, "decay_km": 5.0},
+        # SGV / Inland fringe
+        {"lat": 34.0689, "lon": -117.9300, "base": 400_000,   "decay_km": 8.0},
+        # Baseline floor
+        {"lat": 34.0522, "lon": -118.2437, "base": 300_000,   "decay_km": 999.0},
     ],
 }
 
@@ -153,27 +201,50 @@ CREATE TABLE IF NOT EXISTS h3_parcel_enrichments (
 """
 
 
-# ── Land value curve ──────────────────────────────────────────────────────────
+# ── Land value estimation ─────────────────────────────────────────────────────
 
-def _estimate_land_value(dist_km: float, city_name: str) -> float:
-    curve = _LAND_VALUE_CURVE.get(city_name, _LAND_VALUE_CURVE["austin"])
-    for lo, hi, val in curve:
-        if lo <= dist_km < hi:
-            return float(val)
-    return float(curve[-1][2])
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    import math
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def _estimate_land_value(h3_idx: str, city_name: str) -> float:
+    """Multi-anchor land value estimate using exponential decay from each attractor.
+
+    Value at each anchor follows V(d) = base * exp(-d / decay_km).
+    The cell's estimated value is the MAX across all anchors — it benefits from
+    whichever attractor it's closest to.
+
+    This correctly handles:
+    - Multiple employment subcenter gradients (Domain, Chandler tech, etc.)
+    - Coastal premiums when anchors are placed at the shore (LA)
+    - Far-fringe floor via a wide-decay baseline anchor
+    """
+    import math
+    anchors = _CITY_VALUE_ANCHORS.get(city_name)
+    if not anchors:
+        return 50_000.0
+
+    lat, lon = h3.cell_to_latlng(h3_idx)
+    best = 0.0
+    for a in anchors:
+        d = _haversine_km(lat, lon, a["lat"], a["lon"])
+        v = a["base"] * math.exp(-d / a["decay_km"])
+        if v > best:
+            best = v
+    return float(best)
 
 
 def _dist_km(h3_idx: str, city_id: int) -> float:
-    import math
     clat, clon = _CITY_CENTERS[city_id]
     lat, lon = h3.cell_to_latlng(h3_idx)
-    R = 6371.0
-    dlat = math.radians(lat - clat)
-    dlon = math.radians(lon - clon)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(clat)) * math.cos(math.radians(lat))
-         * math.sin(dlon / 2) ** 2)
-    return R * 2 * math.asin(math.sqrt(a))
+    return _haversine_km(lat, lon, clat, clon)
 
 
 # ── Nominatim ────────────────────────────────────────────────────────────────
@@ -312,8 +383,7 @@ def _aggregate_to_h3(df: pd.DataFrame, city_id: int, city_name: str) -> pd.DataF
     for h3_idx, grp in df.groupby("h3_index"):
         tc = grp["property_type"].value_counts()
         dominant = tc.index[0] if len(tc) > 0 else "unknown"
-        dist = _dist_km(h3_idx, city_id)
-        land_val = _estimate_land_value(dist, city_name)
+        land_val = _estimate_land_value(h3_idx, city_name)
 
         agg.append({
             "h3_index":                h3_idx,
@@ -444,8 +514,7 @@ def run(cities: list[str] | None = None, geocode_phoenix: bool = False,
 
                 rows = []
                 for idx in cells:
-                    dist = _dist_km(idx, city_id)
-                    land_val = _estimate_land_value(dist, city_name)
+                    land_val = _estimate_land_value(idx, city_name)
                     rows.append({
                         "h3_index":                idx,
                         "city_id":                 city_id,
@@ -468,8 +537,7 @@ def run(cities: list[str] | None = None, geocode_phoenix: bool = False,
                     """), {"cid": city_id}).fetchall()]
                 rows = []
                 for idx in cells:
-                    dist = _dist_km(idx, city_id)
-                    land_val = _estimate_land_value(dist, city_name)
+                    land_val = _estimate_land_value(idx, city_name)
                     rows.append({
                         "h3_index":                idx,
                         "city_id":                 city_id,

@@ -644,7 +644,7 @@ def save_opportunities(opps: pd.DataFrame, engine) -> None:
                 "zoning_category":         r.get("zoning_category") or "unknown",
                 "acreage_est":             _f("acreage_est"),
                 "tier":                    str(r.get("tier", "")),
-                "nearest_address":         r.get("nearest_address") or "",
+                "nearest_address":         "" if pd.isna(r.get("nearest_address")) else (r.get("nearest_address") or ""),
                 "dominant_property_type":  r.get("dominant_property_type") or "unknown",
                 "est_land_value_acre":     _f("est_land_value_acre"),
                 "est_construction_months": None if (ec is None or (isinstance(ec, float) and np.isnan(ec))) else int(ec),
