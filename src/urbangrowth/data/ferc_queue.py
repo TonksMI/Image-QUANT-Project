@@ -653,14 +653,36 @@ class SPPScraper(ISOScraper):
 
 
 class NYISOScraper(ISOScraper):
-    """NYISO — Interconnection Queue."""
+    """NYISO — Interconnection Queue (dynamically resolved from the interconnections page)."""
 
     iso_name = "nyiso"
+    _INDEX_URL = "https://www.nyiso.com/interconnections"
+    _FOLDER_ID = "1407078"
 
     def get_download_url(self) -> str:
+        import re as _re
+        try:
+            resp = requests.get(
+                self._INDEX_URL,
+                headers=_HEADERS,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            m = _re.search(
+                rf"/documents/\d+/{self._FOLDER_ID}/NYISO-Interconnection-Queue[^\"'\s]+\.xlsx[^\"'\s]*",
+                resp.text,
+            )
+            if m:
+                url = "https://www.nyiso.com" + m.group(0)
+                log.info("nyiso_queue_url_found", url=url)
+                return url
+        except Exception as exc:
+            log.warning("nyiso_index_fetch_failed", error=str(exc))
+        # Fallback to last-known URL
         return (
-            "https://www.nyiso.com/documents/20142/3625096/"
-            "NYISO-Interconnection-Queue.xlsx"
+            "https://www.nyiso.com/documents/20142/1407078/"
+            "NYISO-Interconnection-Queue-03-31-2026.xlsx/"
+            "ff0e2005-e8d3-e75d-3e81-fa7027a52685?t=1776108425656"
         )
 
     def parse(self, path: Path) -> pd.DataFrame:
@@ -676,16 +698,16 @@ class NYISOScraper(ISOScraper):
         df = df.dropna(how="all")
 
         cols = list(df.columns)
-        id_col = _find_col(cols, ["queue id", "case no", "project id", "id"])
+        id_col = _find_col(cols, ["queue pos", "queue id", "case no", "project id", "id"])
         name_col = _find_col(cols, ["project name", "name"])
         state_col = _find_col(cols, ["state"])
         # NYISO uses zone rather than county
         county_col = _find_col(cols, ["zone", "county"])
-        mw_col = _find_col(cols, ["mw", "capacity"])
-        fuel_col = _find_col(cols, ["type", "fuel", "technology", "resource"])
-        status_col = _find_col(cols, ["status"])
-        qdate_col = _find_col(cols, ["application date", "queue date", "received", "entered"])
-        inservice_col = _find_col(cols, ["in-service", "in service", "cod", "proposed"])
+        mw_col = _find_col(cols, ["sp (mw)", "wp (mw)", "mw", "capacity"])
+        fuel_col = _find_col(cols, ["type/ fuel", "type", "fuel", "technology", "resource"])
+        status_col = _find_col(cols, ["status", "s"])
+        qdate_col = _find_col(cols, ["date of ir", "application date", "queue date", "received", "entered"])
+        inservice_col = _find_col(cols, ["proposed in-service", "proposed cod", "in-service", "in service", "cod", "proposed"])
 
         rows = []
         for _, row in df.iterrows():
