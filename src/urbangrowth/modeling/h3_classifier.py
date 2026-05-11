@@ -1,20 +1,27 @@
 """H3 cell investment classifier.
 
 Trains a GradientBoostingClassifier to predict which H3 cells will see
->= 5 percentage-point growth in built_pct over the next 12 months.
+above-median built_pct growth relative to their city peers over the next
+12 months.
 
-Outputs a probability map (investment_score) per H3 cell saved to the
-h3_predictions table and to a parquet file for visualization.
+Fixes vs. original:
+  - Relative target: top-N% of changers per city/date (handles Phoenix
+    where absolute built_pct values are near-zero due to satellite
+    classification issues — an absolute 5pp threshold is never reachable).
+  - Temporal train/test split: train on signal_date < cutoff, test on
+    signal_date >= cutoff. Prevents look-ahead bias from spatial
+    autocorrelation between neighboring cells.
+  - predict_latest uses the latest date with non-null built_pct, not the
+    absolute latest date (which often has NULL satellite data).
 
 Usage:
     python -m urbangrowth.modeling.h3_classifier
-    python -m urbangrowth.modeling.h3_classifier --horizon 12 --threshold 0.05
+    python -m urbangrowth.modeling.h3_classifier --horizon 12 --top-pct 0.25
 """
 from __future__ import annotations
 
 import argparse
 import json
-from datetime import date
 from pathlib import Path
 
 import h3
@@ -25,9 +32,7 @@ import structlog
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.inspection import permutation_importance
 from sklearn.metrics import classification_report, roc_auc_score
-from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -37,7 +42,6 @@ from urbangrowth.db.loaders import _engine
 load_dotenv()
 log = structlog.get_logger(__name__)
 
-# Known city centers (lat, lng)
 _CITY_CENTERS: dict[int, tuple[float, float]] = {
     1: (33.4484, -112.0740),  # phoenix
     2: (30.2672, -97.7431),   # austin
@@ -48,13 +52,14 @@ _FEATURE_COLS = ["built_pct", "veg_pct"] + _TRANSITION_KEYS + [
     "permit_count", "permit_valuation_norm", "dist_to_center_km",
 ]
 
+# Train on signal_dates before this cutoff; test on >= cutoff.
+# Ensures no future spatial neighbors leak into training.
+_TRAIN_CUTOFF = pd.Timestamp("2022-01-01")
+
 MODEL_VERSION = "gbm_v1"
 
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
-
+# ── Data loading ──────────────────────────────────────────────────────────────
 
 def _load_h3_features() -> pd.DataFrame:
     engine = _engine()
@@ -100,51 +105,62 @@ def _add_distance(df: pd.DataFrame) -> pd.DataFrame:
         a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
         return 6371.0 * 2 * np.arcsin(np.sqrt(a))
 
+    df = df.copy()
     df["dist_to_center_km"] = [
         _haversine(ll, c) for ll, c in zip(latlngs, centers)
     ]
     return df
 
 
-# ---------------------------------------------------------------------------
-# Training set construction
-# ---------------------------------------------------------------------------
-
+# ── Training set construction ─────────────────────────────────────────────────
 
 def build_training_set(
     df: pd.DataFrame,
     horizon_months: int = 12,
-    threshold: float = 0.05,
+    top_pct: float = 0.25,
 ) -> pd.DataFrame:
-    """Join each cell's features at time t with its built_pct at t + horizon."""
+    """Pair each cell's features at t with its built_pct change at t+horizon.
+
+    Target: whether this cell's built_pct change is in the top `top_pct`
+    fraction of all changers for the same city and signal date.  This is
+    scale-invariant — it works even when absolute built_pct values are tiny
+    (e.g. Phoenix where satellite classification gives near-zero values).
+    """
     df = df.copy()
-    df["date_future"] = df["date"].apply(lambda d: d + relativedelta(months=horizon_months))
+    df["date_future"] = df["date"].apply(
+        lambda d: d + relativedelta(months=horizon_months)
+    )
 
     future = df[["h3_index", "city_id", "date", "built_pct"]].rename(
         columns={"date": "date_future", "built_pct": "built_pct_future"}
     )
     merged = df.merge(future, on=["h3_index", "city_id", "date_future"], how="inner")
-    merged["target"] = ((merged["built_pct_future"] - merged["built_pct"]) >= threshold).astype(int)
+    merged["built_pct_change"] = merged["built_pct_future"] - merged["built_pct"]
+
+    # Relative target: top top_pct of changers within the same city+date bucket
+    def _label(group: pd.DataFrame) -> pd.Series:
+        thresh = group["built_pct_change"].quantile(1.0 - top_pct)
+        return (group["built_pct_change"] >= thresh).astype(int)
+
+    merged["target"] = merged.groupby(
+        ["city_id", "date"], group_keys=False
+    ).apply(_label)
 
     log.info(
         "training_set_built",
         rows=len(merged),
-        positive_rate=round(merged["target"].mean(), 4),
+        positive_rate=round(float(merged["target"].mean()), 4),
         horizon=horizon_months,
-        threshold=threshold,
+        top_pct=top_pct,
     )
     return merged
 
 
-# ---------------------------------------------------------------------------
-# Feature engineering
-# ---------------------------------------------------------------------------
-
+# ── Feature engineering ───────────────────────────────────────────────────────
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _expand_transitions(df)
     df = _add_distance(df)
-    # Normalise permit_valuation by cells that have any permits to avoid scale dominance
     max_val = df["permit_valuation"].replace(0, np.nan).quantile(0.99)
     df["permit_valuation_norm"] = df["permit_valuation"] / (max_val if max_val else 1.0)
     df["permit_valuation_norm"] = df["permit_valuation_norm"].clip(0, 1).fillna(0)
@@ -152,26 +168,42 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ---------------------------------------------------------------------------
-# Model training
-# ---------------------------------------------------------------------------
-
+# ── Model training ────────────────────────────────────────────────────────────
 
 def train(
     df: pd.DataFrame,
     horizon_months: int = 12,
-    threshold: float = 0.05,
-    test_size: float = 0.2,
+    top_pct: float = 0.25,
     random_state: int = 42,
 ) -> tuple[Pipeline, pd.DataFrame]:
     df = engineer_features(df)
-    training = build_training_set(df, horizon_months=horizon_months, threshold=threshold)
+    training = build_training_set(df, horizon_months=horizon_months, top_pct=top_pct)
 
-    X = training[_FEATURE_COLS].fillna(0)
-    y = training["target"]
+    # Temporal split: train on earlier signal dates, test on later ones.
+    # This prevents look-ahead from spatially correlated neighboring cells.
+    train_mask = training["date"] < _TRAIN_CUTOFF
+    test_mask  = training["date"] >= _TRAIN_CUTOFF
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y
+    if train_mask.sum() < 100 or test_mask.sum() < 20:
+        log.warning(
+            "small_split",
+            train=int(train_mask.sum()),
+            test=int(test_mask.sum()),
+            cutoff=str(_TRAIN_CUTOFF.date()),
+        )
+
+    X_train = training.loc[train_mask, _FEATURE_COLS].fillna(0)
+    y_train = training.loc[train_mask, "target"]
+    X_test  = training.loc[test_mask,  _FEATURE_COLS].fillna(0)
+    y_test  = training.loc[test_mask,  "target"]
+
+    log.info(
+        "temporal_split",
+        train_rows=len(X_train),
+        test_rows=len(X_test),
+        cutoff=str(_TRAIN_CUTOFF.date()),
+        train_pos_rate=round(float(y_train.mean()), 4),
+        test_pos_rate=round(float(y_test.mean()), 4),
     )
 
     pipe = Pipeline([
@@ -184,52 +216,70 @@ def train(
             random_state=random_state,
         )),
     ])
-    log.info("training_model", train_rows=len(X_train), test_rows=len(X_test))
     pipe.fit(X_train, y_train)
 
-    y_prob = pipe.predict_proba(X_test)[:, 1]
-    auc = roc_auc_score(y_test, y_prob)
-    report = classification_report(y_test, pipe.predict(X_test), output_dict=True)
-    log.info(
-        "model_trained",
-        auc=round(auc, 4),
-        f1_pos=round(report.get("1", {}).get("f1-score", 0), 4),
-        accuracy=round(report.get("accuracy", 0), 4),
-    )
+    if len(X_test) >= 10:
+        y_prob = pipe.predict_proba(X_test)[:, 1]
+        auc = roc_auc_score(y_test, y_prob)
+        report = classification_report(y_test, pipe.predict(X_test), output_dict=True)
+        log.info(
+            "model_trained",
+            auc=round(auc, 4),
+            f1_pos=round(report.get("1", {}).get("f1-score", 0), 4),
+            accuracy=round(report.get("accuracy", 0), 4),
+        )
 
-    # Feature importance
     imp = pd.Series(
         pipe.named_steps["clf"].feature_importances_,
         index=_FEATURE_COLS,
     ).sort_values(ascending=False)
-    log.info("feature_importance", importances=imp.to_dict())
+    log.info("feature_importance", importances=imp.round(4).to_dict())
 
     return pipe, training
 
 
-# ---------------------------------------------------------------------------
-# Inference & persistence
-# ---------------------------------------------------------------------------
-
+# ── Inference ─────────────────────────────────────────────────────────────────
 
 def predict_latest(pipe: Pipeline, df: pd.DataFrame) -> pd.DataFrame:
-    """Score all cells at the most recent date per city."""
+    """Score all cells at the most recent date with non-null built_pct per city.
+
+    The absolute latest date in h3_features often has NULL satellite data
+    (the pipeline ingests a placeholder row before imagery is processed).
+    Using that date would feed all-zero built_pct into the GBM, causing a
+    distribution shift vs. the training data.
+    """
     df = engineer_features(df)
+
+    # Find the latest date per city where built_pct is actually populated
+    has_data = df[df["built_pct"].notna() & (df["built_pct"] > 0)]
     latest = (
-        df.groupby("city_id")["date"].max().reset_index().rename(columns={"date": "max_date"})
+        has_data.groupby("city_id")["date"]
+        .max()
+        .reset_index()
+        .rename(columns={"date": "max_date"})
     )
-    current = df.merge(latest, on="city_id").query("date == max_date")
+    if latest.empty:
+        log.warning("no_non_null_built_pct_for_inference")
+        return pd.DataFrame()
+
+    current = df.merge(latest, on="city_id").query("date == max_date").copy()
+    log.info(
+        "inference_dates",
+        dates=current.groupby("city_id")["date"].first().to_dict(),
+    )
+
     X = current[_FEATURE_COLS].fillna(0)
-    current = current.copy()
     current["investment_score"] = pipe.predict_proba(X)[:, 1]
     log.info(
         "predictions_made",
         rows=len(current),
-        mean_score=round(current["investment_score"].mean(), 4),
-        top10_threshold=round(current["investment_score"].quantile(0.9), 4),
+        mean_score=round(float(current["investment_score"].mean()), 4),
+        top10_threshold=round(float(current["investment_score"].quantile(0.9)), 4),
     )
     return current
 
+
+# ── Persistence ───────────────────────────────────────────────────────────────
 
 def _ensure_predictions_table(engine: sa.Engine) -> None:
     ddl = """
@@ -280,31 +330,30 @@ def save_predictions(preds: pd.DataFrame) -> Path:
 
     log.info("predictions_saved_db", rows=len(rows))
 
-    out_path = data_path("processed/signals/h3_pred.parquet")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path = data_path("processed/signals") / "h3_pred.parquet"
     rows.to_parquet(out_path, index=False)
     log.info("predictions_saved_parquet", path=str(out_path))
     return out_path
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
+# ── Entry point ───────────────────────────────────────────────────────────────
 
-
-def run(horizon_months: int = 12, threshold: float = 0.05) -> None:
+def run(horizon_months: int = 12, top_pct: float = 0.25) -> None:
     df = _load_h3_features()
-    pipe, _ = train(df, horizon_months=horizon_months, threshold=threshold)
+    pipe, _ = train(df, horizon_months=horizon_months, top_pct=top_pct)
     preds = predict_latest(pipe, df)
-    save_predictions(preds)
+    if not preds.empty:
+        save_predictions(preds)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="H3 cell investment classifier")
-    parser.add_argument("--horizon", type=int, default=12, help="Forward horizon in months")
-    parser.add_argument("--threshold", type=float, default=0.05, help="Min built_pct increase to be positive")
+    parser.add_argument("--horizon", type=int, default=12,
+                        help="Forward horizon in months (default: 12)")
+    parser.add_argument("--top-pct", type=float, default=0.25,
+                        help="Top fraction of changers to label positive (default: 0.25)")
     args = parser.parse_args()
-    run(horizon_months=args.horizon, threshold=args.threshold)
+    run(horizon_months=args.horizon, top_pct=args.top_pct)
 
 
 if __name__ == "__main__":

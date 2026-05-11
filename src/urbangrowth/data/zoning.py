@@ -68,7 +68,7 @@ _MARICOPA_URL = (
 )
 
 # Austin Socrata GeoJSON
-_ATX_BASE_URL = "https://data.austintexas.gov/resource/5rzy-nm5e.geojson"
+_ATX_BASE_URL = "https://data.austintexas.gov/resource/q3y3-ungd.geojson"
 _ATX_PAGE_LIMIT = 50_000
 
 # ArcGIS REST page size
