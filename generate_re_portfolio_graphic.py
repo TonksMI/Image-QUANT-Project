@@ -25,10 +25,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="C:/Users/17ton/urbangrowth/.env")
 
-from sqlalchemy import text
-from urbangrowth.db.loaders import _engine
 from urbangrowth.modeling.backtest import load_monthly_returns, performance_stats
 import h3
+from data.loader import load_lots
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PORTFOLIO ASSUMPTIONS
@@ -128,35 +127,17 @@ print(f"FAR (residential): {FAR['residential']:.2f}  Rent PSF: ${RENT_PSF_YR['re
 print(f"Exit cap (residential): {EXIT_CAP_RATE['residential']:.1%}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Load top lots from DB
+# Load top lots (DB if available, flat-file fallback otherwise)
 # ─────────────────────────────────────────────────────────────────────────────
-engine = _engine()
-# Query top lots from each city separately to ensure balanced representation
-with engine.connect() as conn:
-    lots_phx = pd.read_sql(text("""
-        SELECT lo.h3_index, lo.opportunity_score, lo.acreage_est,
-               lo.dist_to_center_km, lo.dominant_property_type,
-               lo.est_land_value_acre, lo.est_construction_months,
-               lo.est_cost_per_sqft, lo.nearest_address,
-               c.name as city
-        FROM lot_opportunities lo
-        JOIN cities c ON lo.city_id = c.city_id
-        WHERE lo.tier LIKE 'Tier 1%' AND c.name = 'phoenix'
-        ORDER BY lo.opportunity_score DESC
-        LIMIT 15
-    """), conn)
-    lots_aus = pd.read_sql(text("""
-        SELECT lo.h3_index, lo.opportunity_score, lo.acreage_est,
-               lo.dist_to_center_km, lo.dominant_property_type,
-               lo.est_land_value_acre, lo.est_construction_months,
-               lo.est_cost_per_sqft, lo.nearest_address,
-               c.name as city
-        FROM lot_opportunities lo
-        JOIN cities c ON lo.city_id = c.city_id
-        WHERE lo.tier LIKE 'Tier 1%' AND c.name = 'austin'
-        ORDER BY lo.opportunity_score DESC
-        LIMIT 15
-    """), conn)
+# load_lots() tries PostgreSQL first; falls back to data/lots_*.csv automatically
+_phx = load_lots(city="phoenix", limit=15)
+_aus = load_lots(city="austin",  limit=15)
+# Normalise column name (DB returns 'city', flat file returns 'city_name')
+for _df in [_phx, _aus]:
+    if "city_name" in _df.columns and "city" not in _df.columns:
+        _df.rename(columns={"city_name": "city"}, inplace=True)
+lots_phx = _phx.head(15)
+lots_aus = _aus.head(15)
 
 # Interleave Phoenix and Austin for geographic diversification
 lots = pd.concat([lots_phx, lots_aus]).reset_index(drop=True)

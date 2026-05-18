@@ -17,58 +17,19 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv("C:/Users/17ton/urbangrowth/.env")
 
-from sqlalchemy import text
-from urbangrowth.db.loaders import _engine
 import h3
+from data.loader import load_lots, load_ic_backtest
 
-engine = _engine()
+# ── 1. IC backtest data (flat file; no DB table exists for this) ──────────────
+print("Loading IC backtest from data/ic_backtest.json")
 
-# ── 1. Check available tables ─────────────────────────────────────────────────
-with engine.connect() as conn:
-    tables = pd.read_sql(text(
-        "SELECT table_name as name FROM information_schema.tables "
-        "WHERE table_schema='public' ORDER BY table_name"), conn)
-print("DB tables:", tables["name"].tolist())
-
-# ── 2. Load IC backtest data ──────────────────────────────────────────────────
-IC_TABLES = ["backtest_results", "lot_backtest_ic", "h3_backtest_ic",
-             "lot_ic", "opportunity_ic", "model_ic"]
-ic_df = None
-with engine.connect() as conn:
-    for t in IC_TABLES:
-        if t in tables["name"].values:
-            ic_df = pd.read_sql(text(f"SELECT * FROM {t} LIMIT 5"), conn)
-            print(f"Found: {t} — columns: {ic_df.columns.tolist()}")
-            break
-if ic_df is None:
-    print("No IC table found — using hardcoded values from codebase audit")
-
-# ── 3. Query top lots for /tmp/top_lots.json ─────────────────────────────────
-with engine.connect() as conn:
-    lots_phx = pd.read_sql(text("""
-        SELECT lo.h3_index, lo.opportunity_score, lo.acreage_est,
-               lo.dist_to_center_km, lo.dominant_property_type,
-               lo.est_land_value_acre, lo.est_construction_months,
-               lo.est_cost_per_sqft, lo.nearest_address,
-               c.name as city_name
-        FROM lot_opportunities lo
-        JOIN cities c ON lo.city_id = c.city_id
-        WHERE lo.tier LIKE 'Tier 1%' AND c.name = 'phoenix'
-        ORDER BY lo.opportunity_score DESC
-        LIMIT 5
-    """), conn)
-    lots_aus = pd.read_sql(text("""
-        SELECT lo.h3_index, lo.opportunity_score, lo.acreage_est,
-               lo.dist_to_center_km, lo.dominant_property_type,
-               lo.est_land_value_acre, lo.est_construction_months,
-               lo.est_cost_per_sqft, lo.nearest_address,
-               c.name as city_name
-        FROM lot_opportunities lo
-        JOIN cities c ON lo.city_id = c.city_id
-        WHERE lo.tier LIKE 'Tier 1%' AND c.name = 'austin'
-        ORDER BY lo.opportunity_score DESC
-        LIMIT 5
-    """), conn)
+# ── 2. Query top lots (DB if available, flat-file fallback) ──────────────────
+lots_phx = load_lots(city="phoenix", limit=5).head(5)
+lots_aus = load_lots(city="austin",  limit=5).head(5)
+# Normalise column name
+for _df in [lots_phx, lots_aus]:
+    if "city_name" not in _df.columns and "city" in _df.columns:
+        _df.rename(columns={"city": "city_name"}, inplace=True)
 
 lots = pd.concat([lots_phx, lots_aus]).reset_index(drop=True)
 latlons = [h3.cell_to_latlng(idx) for idx in lots["h3_index"]]

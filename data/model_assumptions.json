@@ -1,0 +1,50 @@
+{
+  "construction_rate": 0.085,
+  "perm_loan_rate": 0.06,
+  "ltv": 0.65,
+  "draw_factor": 0.55,
+  "soft_cost_pct": 0.15,
+  "hold_years": 5,
+  "far": {
+    "residential": 0.5,
+    "commercial": 0.65,
+    "vacant": 0.4,
+    "unknown": 0.4
+  },
+  "rent_psf_yr": {
+    "residential": 21.0,
+    "commercial": 26.0,
+    "vacant": 21.0,
+    "unknown": 20.0
+  },
+  "exit_cap_rate": {
+    "residential": 0.051,
+    "commercial": 0.062,
+    "vacant": 0.055,
+    "unknown": 0.054
+  },
+  "bts_cap_phx": 0.05,
+  "rent_growth": {
+    "phoenix": 0.03,
+    "austin": 0.02
+  },
+  "rent_stress_yr1": {
+    "phoenix": 0.0,
+    "austin": -0.02
+  },
+  "leaseup_months": {
+    "phoenix": 12,
+    "austin": 15
+  },
+  "leaseup_occ": 0.55,
+  "cost_psf_by_city": {
+    "phoenix": 175,
+    "austin": 155
+  },
+  "sell_cost_pct": 0.02,
+  "bts_phx_share": 0.4,
+  "land_price_per_acre": {
+    "phoenix": 200000,
+    "austin": 150000
+  }
+}

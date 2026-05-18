@@ -1,0 +1,34 @@
+{
+  "phoenix": {
+    "years": [
+      2018,
+      2019,
+      2020
+    ],
+    "ic": [
+      0.12,
+      0.41,
+      0.08
+    ],
+    "note": "Permits API broke Q3 2020; signal degraded post-2020"
+  },
+  "austin": {
+    "years": [
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023
+    ],
+    "ic": [
+      0.21,
+      0.35,
+      -0.18,
+      -0.22,
+      -0.09,
+      0.29
+    ],
+    "note": "COVID disruption 2020-22; 2023 recovery +0.29"
+  }
+}
