@@ -112,11 +112,12 @@ def _monthly_flows(queue: pd.DataFrame) -> pd.DataFrame:
 
 
 def _regional_flows(queue: pd.DataFrame) -> pd.DataFrame:
-    """Sum net MW additions per (month, region)."""
+    """Sum net MW additions per (month, region). Region normalized to uppercase."""
     q = queue.dropna(subset=["queue_date"]).copy()
     q["month"] = q["queue_date"].dt.to_period("M")
+    q["region"] = q["region"].str.upper().fillna("")
     return (
-        q.groupby(["month", "region"])["mw_capacity"]
+        q[q["region"] != ""].groupby(["month", "region"])["mw_capacity"]
         .sum()
         .reset_index()
         .rename(columns={"mw_capacity": "net_mw"})
@@ -195,8 +196,11 @@ def _region_weighted_features(
         if not region_weight:
             continue
 
-        total_w = sum(region_weight.values())
-        rw = pd.Series(region_weight) / total_w
+        # Use raw geographic weights (NOT normalized to 1) so that tickers with
+        # higher exposure to a region receive proportionally larger signals.
+        # Normalizing to sum=1 would destroy cross-sectional variation when only
+        # one ISO/region is present (all tickers would get identical values).
+        rw = pd.Series(region_weight)
 
         # Weighted MW flow
         common = [r for r in rw.index if r in pivot.columns]

@@ -28,7 +28,7 @@ from urbangrowth.signals.ticker_mapping import (
     all_symbols,
     sector_for_symbol,
 )
-from urbangrowth.signals.utils import filter_date_range, rolling_zscore, yoy_change, zscore_cross_section
+from urbangrowth.signals.utils import filter_date_range, rolling_zscore, yoy_change
 
 log = structlog.get_logger(__name__)
 
@@ -124,6 +124,11 @@ def run(start: str = "2015-01", end: str = "2025-12") -> None:
         return
 
     feat_wide = _compute_fred_features(wide)
+    # Apply rolling time-series z-score per feature before broadcasting.
+    # Cross-section z-score would produce NaN because all same-sector tickers
+    # share identical macro values (std=0 within each period).
+    for col in feat_wide.columns:
+        feat_wide[col] = rolling_zscore(feat_wide[col], 24)
     feat_wide.index = feat_wide.index.to_timestamp()
 
     long = (
@@ -146,7 +151,6 @@ def run(start: str = "2015-01", end: str = "2025-12") -> None:
     df = pd.concat(frames, ignore_index=True)
     df = df.dropna(subset=["feature_value"])
     df = filter_date_range(df, start, end)
-    df = zscore_cross_section(df)
 
     df["source"]      = _SOURCE
     df["computed_at"] = pd.Timestamp.utcnow()

@@ -209,6 +209,11 @@ def run(start: str = "2018-01", end: str = "2025-12") -> None:
         return
 
     df = pd.concat(all_frames, ignore_index=True)
+    # Sum contributions from multiple cities for tickers in both Phoenix + Austin
+    df = (
+        df.groupby(["symbol", "period", "feature_name"], as_index=False)["feature_value"]
+        .sum()
+    )
     df = df.dropna(subset=["feature_value"])
     df = filter_date_range(df, start, end)
     df = zscore_cross_section(df)

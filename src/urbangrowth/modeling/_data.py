@@ -66,19 +66,24 @@ def list_signal_sources() -> list[str]:
 
 
 def load_monthly_returns() -> pd.DataFrame:
-    """Load returns table.
+    """Load returns table — month-end rows only, normalized to first-of-month dates.
 
-    Returns: symbol, date (Timestamp), monthly_ret.
+    Returns: symbol, date (Timestamp at month-start), monthly_ret.
     """
     sql = text("""
         SELECT symbol, date, monthly_ret
         FROM   returns
         WHERE  monthly_ret IS NOT NULL
+          AND  monthly_ret <> 'NaN'::numeric
         ORDER  BY date, symbol
     """)
     try:
         with _engine().connect() as conn:
-            return pd.read_sql(sql, conn, parse_dates=["date"])
+            df = pd.read_sql(sql, conn, parse_dates=["date"])
+        if not df.empty:
+            # Normalize month-end dates → first-of-month to match signal periods
+            df["date"] = df["date"].dt.to_period("M").dt.to_timestamp()
+        return df
     except Exception as exc:
         log.warning("returns_load_failed", error=str(exc))
         return pd.DataFrame(columns=["symbol", "date", "monthly_ret"])

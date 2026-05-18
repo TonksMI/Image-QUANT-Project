@@ -368,10 +368,12 @@ def run(start: str = "2015-01", end: str = "2025-12") -> None:
     for year, month in _month_range(start, end):
         cache_path = _month_cache_path(year, month)
 
+        import datetime as _dt
+        month_start = _dt.date(year, month, 1)
+
         # Idempotency check
         if cache_path.exists():
             log.info("usaspending_cache_hit", year=year, month=month, path=str(cache_path))
-            # Still upsert so a re-run after a failed DB write works correctly
             df = pd.read_parquet(cache_path)
         else:
             # Compute ISO date bounds for the month
@@ -393,12 +395,12 @@ def run(start: str = "2015-01", end: str = "2025-12") -> None:
             log.info("usaspending_empty_month", year=year, month=month)
             continue
 
-        # Coerce NaT → None so PostgreSQL receives NULL, not the string "NaT"
-        for col in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
-            df[col] = df[col].where(df[col].notna(), other=None)
+        # Backfill NULL award_dates: USASpending API often omits Action Date.
+        # Fall back to the month's first day so signals can use the date.
         if "award_date" in df.columns:
             df["award_date"] = [
-                v.date() if hasattr(v, "date") and pd.notna(v) else (None if pd.isna(v) else v)
+                (v if (v is not None and not (isinstance(v, float) and pd.isna(v)))
+                 else month_start)
                 for v in df["award_date"]
             ]
 

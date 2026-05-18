@@ -169,6 +169,12 @@ universe:
     primary_signals: [usaspending, ferc_queue]
     geographic_concentration: {TX: 35, VA: 10, nationwide: 55}
 
+  - symbol: PSN
+    name: "Parsons Corporation"
+    sector_tag: civil_construction
+    primary_signals: [usaspending]
+    geographic_concentration: {VA: 20, TX: 12, CA: 10, MD: 8, nationwide: 50}
+
   # ── MATERIALS ─────────────────────────────────────────────────────────────
 
   - symbol: VMC

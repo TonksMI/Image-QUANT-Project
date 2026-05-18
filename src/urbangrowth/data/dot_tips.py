@@ -99,9 +99,18 @@ _RETRY_KWARGS: dict[str, Any] = dict(
 )
 
 
+_SSL_SKIP_HOSTS = {"ftp.txdot.gov"}  # SSL cert chain fails on Windows for this host
+
+
 @retry(**_RETRY_KWARGS)
 def _http_get_with_retry(url: str, timeout: int = 120) -> requests.Response:
-    resp = requests.get(url, headers=_HEADERS, timeout=timeout)
+    from urllib.parse import urlparse
+    host = urlparse(url).netloc
+    verify = host not in _SSL_SKIP_HOSTS
+    if not verify:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    resp = requests.get(url, headers=_HEADERS, timeout=timeout, verify=verify)
     resp.raise_for_status()
     return resp
 
@@ -178,30 +187,26 @@ class DOTScraper(ABC):
 # ---------------------------------------------------------------------------
 
 _TXDOT_SOURCES = [
-    # ArcGIS Open Data direct CSV export
+    # TxDOT FTP — official UTP Excel files (current + prior year fallback)
+    "https://ftp.txdot.gov/pub/txdot/get-involved/tpp/utp/2026utp-searchable.xlsx",
+    "https://ftp.txdot.gov/pub/txdot/get-involved/tpp/utp/2025UTP_Searchable.xlsx",
+    "https://ftp.txdot.gov/pub/txdot/get-involved/tpp/utp/2024UTP_Searchable.xlsx",
+    # Legacy ArcGIS Open Data direct CSV (may be stale)
     "https://opendata.arcgis.com/datasets/de9cb3e86a0e4b29b4d3b4c0c9b9c3a2_0.csv",
-    # TxDOT Open Data CKAN datastore (returns JSON)
-    "https://data.txdot.gov/api/3/action/datastore_search?resource_id=utp&limit=50000",
-    # ArcGIS FeatureServer query endpoint
-    (
-        "https://services.arcgis.com/KTcxiTD9dsQw4r7Z/arcgis/rest/services/"
-        "TxDOT_UTP/FeatureServer/0/query"
-        "?where=1%3D1&outFields=*&f=json&resultRecordCount=10000"
-    ),
 ]
 
 _TX_COL_MAP = {
-    "project_id":  ["project_id", "proj_id", "PROJ_ID", "projectid",
-                    "CSJ", "csj", "control_section_job"],
-    "county":      ["county", "COUNTY", "county_name", "dist_name"],
-    "work_type":   ["work_type", "WORK_TYPE", "work_program", "project_type",
-                    "type_of_work", "wrktype"],
-    "total_cost":  ["total_cost", "TOTAL_COST", "total_project_cost",
-                    "estimated_cost", "proj_cost"],
-    "fiscal_year": ["fiscal_year", "FISCAL_YEAR", "fy", "FY", "let_fy",
-                    "funding_year"],
-    "status":      ["status", "STATUS", "proj_status", "let_status",
-                    "construction_status"],
+    "project_id":  ["Project ID (CSJ)", "project_id", "proj_id", "PROJ_ID",
+                    "projectid", "CSJ", "csj", "control_section_job"],
+    "county":      ["County", "county", "COUNTY", "county_name", "dist_name"],
+    "work_type":   ["UTP Action", "work_type", "WORK_TYPE", "work_program",
+                    "project_type", "type_of_work", "wrktype"],
+    "total_cost":  ["Est. Construction Cost", "total_cost", "TOTAL_COST",
+                    "total_project_cost", "estimated_cost", "proj_cost"],
+    "fiscal_year": ["Est. Let Date Range", "fiscal_year", "FISCAL_YEAR",
+                    "fy", "FY", "let_fy", "funding_year"],
+    "status":      ["UTP Action", "status", "STATUS", "proj_status",
+                    "let_status", "construction_status"],
     "awarded_date": ["awarded_date", "let_date", "LET_DATE", "award_date",
                      "contract_date"],
 }
@@ -238,7 +243,17 @@ class TxDOTScraper(DOTScraper):
                 raw = resp.content
                 content_type = resp.headers.get("Content-Type", "")
 
-                if url.endswith(".csv") or "text/csv" in content_type:
+                if url.endswith(".xlsx") or url.endswith(".xls") or "spreadsheet" in content_type:
+                    xl = pd.ExcelFile(io.BytesIO(raw), engine="openpyxl")
+                    # Pick the first sheet whose name contains "project" or "UTP"
+                    # (skips intro/metadata sheets)
+                    data_sheet = next(
+                        (s for s in xl.sheet_names
+                         if any(kw in s.lower() for kw in ("project", "utp", "tip", "data"))),
+                        xl.sheet_names[-1],
+                    )
+                    df = xl.parse(data_sheet)
+                elif url.endswith(".csv") or "text/csv" in content_type:
                     df = pd.read_csv(io.BytesIO(raw), low_memory=False)
                 elif "datastore_search" in url:
                     df = _parse_ckan_json(raw)
@@ -259,7 +274,12 @@ class TxDOTScraper(DOTScraper):
                     continue
 
                 # Persist raw bytes for manual inspection
-                suffix = ".json" if ("FeatureServer" in url or "datastore_search" in url) else ".csv"
+                if url.endswith(".xlsx") or url.endswith(".xls"):
+                    suffix = ".xlsx"
+                elif "FeatureServer" in url or "datastore_search" in url:
+                    suffix = ".json"
+                else:
+                    suffix = ".csv"
                 raw_path = self.dest_dir / f"{self.state}_tip_{_TODAY}_raw{suffix}"
                 if not raw_path.exists():
                     raw_path.write_bytes(raw)
@@ -287,49 +307,52 @@ class TxDOTScraper(DOTScraper):
         ) from last_exc
 
     def _normalise(self, df: pd.DataFrame) -> pd.DataFrame:
-        out = pd.DataFrame()
-        out["state"] = "TX"
-
         pid_col = _find_col(df, _TX_COL_MAP["project_id"])
         if pid_col is None:
             log.warning("txdot_no_project_id_col", columns=list(df.columns))
             pid_col = df.columns[0]
-        out["project_id"] = df[pid_col].astype(str).str.strip()
-        mask = out["project_id"].notna() & (out["project_id"] != "") & (out["project_id"] != "nan")
-        out = out[mask].copy()
+        project_ids = df[pid_col].astype(str).str.strip()
+        mask = project_ids.notna() & (project_ids != "") & (project_ids != "nan")
+        df_filtered = df[mask].copy()
 
-        fy_col = _find_col(df, _TX_COL_MAP["fiscal_year"])
-        out["fiscal_year"] = (
-            pd.to_numeric(df.loc[mask, fy_col], errors="coerce").astype("Int16")
-            if fy_col else pd.array([pd.NA] * mask.sum(), dtype="Int16")
-        )
+        out = pd.DataFrame(index=df_filtered.index)
+        out["state"] = "TX"
+        out["project_id"] = project_ids[mask].values
 
-        status_col = _find_col(df, _TX_COL_MAP["status"])
+        fy_col = _find_col(df_filtered, _TX_COL_MAP["fiscal_year"])
+        if fy_col:
+            # Handle "FY 2026-2029" style strings — extract the first year
+            raw_fy = df_filtered[fy_col].astype(str).str.extract(r"(\d{4})")[0]
+            out["fiscal_year"] = pd.to_numeric(raw_fy, errors="coerce").astype("Int16").values
+        else:
+            out["fiscal_year"] = pd.array([pd.NA] * len(df_filtered), dtype="Int16")
+
+        status_col = _find_col(df_filtered, _TX_COL_MAP["status"])
         out["status"] = (
-            df.loc[mask, status_col].astype(str).str.strip()
+            df_filtered[status_col].astype(str).str.strip().values
             if status_col else pd.NA
         )
 
-        wt_col = _find_col(df, _TX_COL_MAP["work_type"])
+        wt_col = _find_col(df_filtered, _TX_COL_MAP["work_type"])
         out["project_type"] = (
-            df.loc[mask, wt_col].fillna("").apply(normalize_project_type)
+            df_filtered[wt_col].fillna("").apply(normalize_project_type).values
             if wt_col else "other"
         )
 
-        cost_col = _find_col(df, _TX_COL_MAP["total_cost"])
+        cost_col = _find_col(df_filtered, _TX_COL_MAP["total_cost"])
         out["total_cost"] = (
-            _clean_money(df.loc[mask, cost_col]) if cost_col else pd.NA
+            _clean_money(df_filtered[cost_col]).values if cost_col else pd.NA
         )
 
-        county_col = _find_col(df, _TX_COL_MAP["county"])
+        county_col = _find_col(df_filtered, _TX_COL_MAP["county"])
         out["county"] = (
-            df.loc[mask, county_col].astype(str).str.strip().str.title()
+            df_filtered[county_col].astype(str).str.strip().str.title().values
             if county_col else pd.NA
         )
 
-        aw_col = _find_col(df, _TX_COL_MAP["awarded_date"])
+        aw_col = _find_col(df_filtered, _TX_COL_MAP["awarded_date"])
         out["awarded_date"] = (
-            pd.to_datetime(df.loc[mask, aw_col], errors="coerce").dt.date
+            pd.to_datetime(df_filtered[aw_col], errors="coerce").dt.date.values
             if aw_col else None
         )
 

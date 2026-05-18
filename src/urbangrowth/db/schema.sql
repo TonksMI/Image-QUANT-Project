@@ -257,6 +257,15 @@ DO $$ BEGIN
     ) THEN
         ALTER TABLE returns ADD COLUMN excess_ret_sector NUMERIC(10,6);
     END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'ferc_queue' AND column_name = 'iso'
+    ) THEN
+        ALTER TABLE ferc_queue ADD COLUMN iso TEXT;
+        ALTER TABLE ferc_queue ADD COLUMN project_name TEXT;
+        ALTER TABLE ferc_queue ADD COLUMN state CHAR(2);
+        ALTER TABLE ferc_queue ADD COLUMN county TEXT;
+    END IF;
 END $$;
 
 -- ── SIGNAL FEATURE STORE ──────────────────────────────────────────────────────

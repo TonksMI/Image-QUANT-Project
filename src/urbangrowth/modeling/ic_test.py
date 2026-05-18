@@ -37,7 +37,7 @@ from urbangrowth.modeling.stats import (
 log = structlog.get_logger(__name__)
 
 _IC_HORIZONS = (1, 2, 3)
-_MIN_CROSS_SECTION = 10   # minimum tickers per month to compute IC
+_MIN_CROSS_SECTION = 5    # minimum tickers per month to compute IC
 _MIN_MONTHS = 12          # minimum months to report IC stats
 
 
@@ -94,6 +94,8 @@ def compute_ic(
 
 def ic_summary(ic_df: pd.DataFrame) -> dict:
     """IC mean, IC IR, hit rate, Newey-West t-stat, bootstrap CI."""
+    if ic_df.empty or "ic" not in ic_df.columns:
+        return {}
     s = ic_df["ic"].dropna()
     if len(s) < _MIN_MONTHS:
         return {}
@@ -211,8 +213,8 @@ def run_full_ic_analysis(
     df = pd.DataFrame(rows)
 
     # BH-FDR correction across all (signal, horizon) tests
-    p_vals = df.set_index(df.index)["p_value_raw"]
-    fdr_df = fdr_correction(p_vals.rename(df.index), alpha=0.05)
+    p_vals = df["p_value_raw"]
+    fdr_df = fdr_correction(p_vals, alpha=0.05)
     df["p_adjusted"] = fdr_df["p_adjusted"].values
     df["fdr_rejected"] = fdr_df["rejected"].values
 

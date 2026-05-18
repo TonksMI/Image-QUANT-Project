@@ -41,3 +41,9 @@ env/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Claude Code internal
+.claude/
+
+# API response cache (generated; large)
+cache/

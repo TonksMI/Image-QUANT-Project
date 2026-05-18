@@ -285,7 +285,7 @@ def sector_decomposition(
     """
     try:
         from urbangrowth.signals.ticker_mapping import _universe
-        sector_map = {t["symbol"]: t.get("sector", "unknown") for t in _universe()}
+        sector_map = {t["symbol"]: t.get("sector_tag", "unknown") for t in _universe()}
     except Exception:
         sector_map = {}
 

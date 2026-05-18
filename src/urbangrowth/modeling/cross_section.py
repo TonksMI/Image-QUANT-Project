@@ -183,6 +183,8 @@ def value_beyond_price_volume(
                     continue
 
                 agg = aggregate_fmb(slopes)
+                if agg.empty or "signal" not in agg.columns:
+                    continue
                 agg_dict = agg.set_index("signal").to_dict(orient="index")
                 if feat not in agg_dict:
                     continue
@@ -258,7 +260,7 @@ def build_model_panel(
 
     try:
         from urbangrowth.signals.ticker_mapping import _universe
-        sector_map = {t["symbol"]: t.get("sector", "unknown") for t in _universe()}
+        sector_map = {t["symbol"]: t.get("sector_tag", "unknown") for t in _universe()}
     except Exception:
         sector_map = {}
     wide["_sector"] = wide["symbol"].map(sector_map).fillna("unknown")
@@ -284,6 +286,8 @@ def walk_forward_predict(
 
     Returns DataFrame: period, symbol, score
     """
+    import warnings as _warn
+    _warn.filterwarnings("ignore")
     try:
         from sklearn.impute import SimpleImputer
         from sklearn.preprocessing import StandardScaler
@@ -313,8 +317,17 @@ def walk_forward_predict(
     imputer    = SimpleImputer(strategy="constant", fill_value=0.0)
     all_scores: list[pd.DataFrame] = []
 
+    def _clean(arr: np.ndarray) -> np.ndarray:
+        out = arr.copy()
+        out[~np.isfinite(out)] = 0.0
+        return out
+
+    # Embargo: exclude the last `horizon` months from training at each step
+    # to prevent overlapping forward-return targets leaking future information.
+    # For h=1 this is unchanged; for h=2+ it progressively excludes recent obs.
     for t in periods[min_train_months:]:
-        train = data[data["period"] < t].copy()
+        embargo_cutoff = t - pd.DateOffset(months=horizon)
+        train = data[data["period"] <= embargo_cutoff].copy()
         test  = data[data["period"] == t].copy().reset_index(drop=True)
         if len(train) < 30 or len(test) < 3:
             continue
@@ -336,15 +349,20 @@ def walk_forward_predict(
                 from sklearn.linear_model import Ridge
                 sc  = StandardScaler()
                 mdl = Ridge(alpha=1.0)
-                mdl.fit(sc.fit_transform(X_tr), y_train)
-                y_hat = mdl.predict(sc.transform(X_te))
+                mdl.fit(_clean(sc.fit_transform(X_tr)), y_train)
+                y_hat = mdl.predict(_clean(sc.transform(X_te)))
 
             elif model_type == "elasticnet":
-                from sklearn.linear_model import ElasticNet
+                from sklearn.linear_model import SGDRegressor
                 sc  = StandardScaler()
-                mdl = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=2000)
-                mdl.fit(sc.fit_transform(X_tr), y_train)
-                y_hat = mdl.predict(sc.transform(X_te))
+                # SGDRegressor with elasticnet penalty avoids coordinate descent BLAS crash on Windows
+                mdl = SGDRegressor(
+                    loss="squared_error", penalty="elasticnet",
+                    alpha=0.01, l1_ratio=0.5, max_iter=1000,
+                    tol=1e-3, random_state=42,
+                )
+                mdl.fit(_clean(sc.fit_transform(X_tr)), y_train)
+                y_hat = mdl.predict(_clean(sc.transform(X_te)))
 
             elif model_type == "lgbm":
                 try:

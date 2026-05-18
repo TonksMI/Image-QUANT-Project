@@ -594,11 +594,11 @@ def sig_city_growth(
 @model_app.command("ic-test")
 def model_ic(
     signal: str = typer.Option(..., help="Signal name"),
-    horizon: int = typer.Option(1),
+    horizon: int = typer.Option(None, help="Horizon in months; omit to run 1/2/3"),
 ) -> None:
     """Run IC test for a signal."""
     from urbangrowth.modeling.ic_test import run
-    run(signal_name=signal, horizon=horizon)
+    run(signal_name=signal, horizon=horizon if horizon else None)
 
 
 @model_app.command("decay")

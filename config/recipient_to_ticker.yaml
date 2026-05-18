@@ -67,6 +67,17 @@ mapping:
     - "builders firstsource"
     - "pro build"
 
+  MYR:
+    - "myr group"
+    - "harlan electric"
+    - "western states electric"
+    - "sasco electric"
+    - "sturgeon electric"
+
+  PSN:
+    - "parsons corporation"
+    - "parsons government services"
+
 # Exclusions: recipient name substrings that must NOT be matched to any ticker.
 # Prevents false positives where a common word appears in an unrelated company name.
 exclusions:

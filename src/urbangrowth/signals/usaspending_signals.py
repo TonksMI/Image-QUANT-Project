@@ -51,7 +51,8 @@ TICKER_RECIPIENT_MAP: dict[str, list[str]] = {
     "VMC":  ["vulcan materials"],
     "MLM":  ["martin marietta"],
     "PRIM": ["primoris"],
-    "MYR":  ["myr group", "harlan electric", "sturgeon electric"],
+    "MYR":  ["myr group", "harlan electric", "western states electric", "sasco electric", "sturgeon electric"],
+    "PSN":  ["parsons corporation", "parsons government services"],
 }
 
 
