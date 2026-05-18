@@ -45,7 +45,7 @@ C_T2_AUS  = "#90CAF9"   # pale blue
 
 C_TOP5    = "#16A34A"   # green star highlights
 
-TILE = ctx.providers.CartoDB.Positron   # clean light tile
+TILE = ctx.providers.Esri.WorldStreetMap  # full street + building detail
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 phx_raw = pd.read_csv("docs/_phx_opps.csv", encoding="utf-8", encoding_errors="replace")
@@ -105,7 +105,7 @@ def make_city_map(city_df, city_name, c_t1, c_t2, out_path, accent="#16A34A"):
 
     # Map tile
     try:
-        ctx.add_basemap(ax, source=TILE, zoom=11, attribution=False)
+        ctx.add_basemap(ax, source=TILE, zoom=12, attribution=False)
     except Exception as e:
         print(f"  Tile warning: {e}")
 
