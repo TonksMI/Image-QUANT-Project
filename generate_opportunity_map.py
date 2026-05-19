@@ -52,14 +52,23 @@ df = pd.concat([phx, aus], ignore_index=True)
 df = df.dropna(subset=["lat","lon"])
 df = df[(df["lat"] != 0) & (df["lon"] != 0)]
 
-# Tier flag
+# Tier flags — only render Tier-1 and Tier-2 (others excluded from map)
 df["is_tier1"] = df["tier"].str.startswith("Tier 1")
+df["is_tier2"] = df["tier"].str.startswith("Tier 2")
+df = df[df["is_tier1"] | df["is_tier2"]].copy()   # drop Tier-3/Below
 
 # Score normalised for sizing
 df["score_norm"] = (df["score"] - df["score"].min()) / (df["score"].max() - df["score"].min() + 1e-9)
 
-print(f"Total cells: {len(df)}  |  PHX: {(df.city=='phoenix').sum()}  |  AUS: {(df.city=='austin').sum()}")
-print(f"Tier-1: {df.is_tier1.sum()}  Tier-2: {(~df.is_tier1).sum()}")
+n_phx  = (df.city == "phoenix").sum()
+n_aus  = (df.city == "austin").sum()
+n_t1_p = int(((df.city == "phoenix") & df.is_tier1).sum())
+n_t2_p = int(((df.city == "phoenix") & df.is_tier2).sum())
+n_t1_a = int(((df.city == "austin")  & df.is_tier1).sum())
+n_t2_a = int(((df.city == "austin")  & df.is_tier2).sum())
+print(f"Total cells: {len(df)}  |  PHX: {n_phx}  |  AUS: {n_aus}")
+print(f"PHX  Tier-1: {n_t1_p}  Tier-2: {n_t2_p}")
+print(f"AUS  Tier-1: {n_t1_a}  Tier-2: {n_t2_a}")
 
 # ── 2. Build GeoDataFrame ─────────────────────────────────────────────────────
 gdf = gpd.GeoDataFrame(
@@ -102,16 +111,17 @@ ax_title.text(0.5, 0.85,
     ha="center", va="top", fontsize=22, fontweight="bold",
     color=C_TEXT, transform=ax_title.transAxes)
 ax_title.text(0.5, 0.05,
-    f"2,229 H3 Resolution-8 cells scored by ML model  ·  "
-    f"Phoenix: 478 Tier-1 + 723 Tier-2  ·  Austin: 411 Tier-1 + 617 Tier-2  ·  May 2026",
+    f"{len(df)} H3 Res-8 cells (developability-masked, edge-filtered) · "
+    f"Phoenix: {n_t1_p} Tier-1 + {n_t2_p} Tier-2  ·  "
+    f"Austin: {n_t1_a} Tier-1 + {n_t2_a} Tier-2  ·  May 2026",
     ha="center", va="bottom", fontsize=10, color=C_MUTED,
     transform=ax_title.transAxes)
 
 # ── 5. Helper: draw one city panel ───────────────────────────────────────────
 def draw_panel(ax, city_gdf, top5_gdf, city_label, c_t1, c_t2, tile_source):
-    # Separate tiers
+    # Separate tiers (df already filtered to T1+T2 only)
     t1 = city_gdf[city_gdf.is_tier1]
-    t2 = city_gdf[~city_gdf.is_tier1]
+    t2 = city_gdf[city_gdf.is_tier2]
 
     # Sizes: Tier-1 bigger, scaled by score
     sz_t2 = 6  + t2["score_norm"] * 10
