@@ -52,7 +52,24 @@ EXIT_CAP_RATE = {
 VACANCY_RATE           = 0.07         # 7% vacancy loss
 OPEX_RATIO             = 0.35         # 35% of EGI (mgmt, tax, insurance, maint)
 
-PARCEL_ACRES           = 1.0          # typical carved parcel from a Tier-1 cell (~43k sqft)
+# Density-aware project acreage (replaces fixed PARCEL_ACRES)
+# Power-law scaling by distance from CBD + property-type multiplier.
+# Same formula used in generate_opportunity_map_light.py for consistency.
+_TYPE_MULT_PORT = {
+    "residential": 1.00, "multifamily": 0.80, "commercial": 0.50,
+    "industrial":  1.50, "vacant": 1.20, "open_space": 0.40, "unknown": 1.00,
+}
+def realistic_acreage(dist_km, ptype):
+    """
+    Return project acreage for a SINGLE carved parcel within a Tier-1 opportunity zone.
+    Portfolio context: one development deal, not the full H3 cell.
+    Clamp [1.0, 2.5] acres — urban infill (1 ac) to suburban garden-style (2.5 ac).
+    Larger zone-level opportunities are modelled in generate_opportunity_map_light.py.
+    """
+    d    = float(dist_km) if dist_km and not np.isnan(float(dist_km)) else 15.0
+    base = np.clip(0.10 * d ** 0.70, 1.0, 2.5)
+    mult = _TYPE_MULT_PORT.get(str(ptype).lower().split()[0], 1.0)
+    return round(base * mult, 1)
 # Validated land value floors (Tier-1 submarket; source: AI model + broker comps 2025)
 LAND_VALUE_FLOOR = {                  # min $/acre by city (from AI model + broker validation)
     "phoenix": 200_000,              # Phoenix Chandler/Scottsdale Tier-1: $150k-$300k/acre
@@ -195,8 +212,8 @@ for _, r in lots.iterrows():
     build_mo  = int(r["est_construction_months"] if pd.notna(r["est_construction_months"]) and r["est_construction_months"] else 14)
     build_mo  = max(10, min(18, build_mo))   # clamp 10-18 months (Type V garden-style)
 
-    # Size
-    acres      = PARCEL_ACRES
+    # Size — density-aware project acreage (not full 208-acre H3 cell)
+    acres      = realistic_acreage(float(r.get("dist_to_center_km") or 15), ptype)
     sqft_land  = acres * 43_560
     sqft_bld   = sqft_land * FAR[ptype]
 

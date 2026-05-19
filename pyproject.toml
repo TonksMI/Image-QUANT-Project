@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "urbangrowth"
 version = "0.1.0"
 description = "Construction/infrastructure alt-data signal research platform"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "typer>=0.9",
     "structlog>=23.1",
