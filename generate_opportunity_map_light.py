@@ -82,10 +82,44 @@ def _irr(cfs, guess=0.15, tol=1e-6, max_iter=200):
         r = r1
     return r
 
+# ── Density-aware acreage scaling ─────────────────────────────────────────────
+# H3 cells are ~208 acres but actual projects are far smaller.
+# Scale realistic project acreage by distance from CBD (density proxy)
+# and property type.
+#
+# Calibration:
+#   0-4 km   urban core/infill     2-4 ac   (single block face)
+#   4-8 km   inner urban           4-9 ac   (small multifamily site)
+#   8-15 km  suburban              9-18 ac  (garden-style complex)
+#   15-25 km outer suburban       15-28 ac  (larger complex / small subdivision)
+#   25-40 km exurban              25-45 ac  (community-scale development)
+#   40+ km   fringe               35-60 ac  (master-plan parcel)
+
+_TYPE_MULT = {
+    "residential": 1.00,
+    "multifamily": 0.80,   # already multifamily — denser, smaller footprint
+    "commercial":  0.50,   # commercial lots are smaller by nature
+    "industrial":  1.50,   # industrial needs room for loading, yards
+    "vacant":      1.20,   # open land — can accommodate larger projects
+    "open_space":  0.40,   # constrained; likely partial development only
+    "unknown":     1.00,
+}
+
+def realistic_acreage(dist_km, ptype):
+    """Return a realistic single-project acreage given distance from CBD and type."""
+    d = float(dist_km) if dist_km and not np.isnan(float(dist_km)) else 15.0
+    # Smooth power-law base: ~2 ac at 3 km, ~8 ac at 10 km, ~20 ac at 25 km, ~40 ac at 45 km
+    base = np.clip(1.2 * d ** 0.85, 2.0, 60.0)
+    mult = _TYPE_MULT.get(str(ptype).lower().split()[0], 1.0)
+    return round(base * mult, 1)
+
 def forecast_lot(row, city):
     ptype    = str(row.get("type", "unknown")).lower().split()[0]
     if ptype not in FAR: ptype = "unknown"
-    acres    = float(row.get("acres", 208) or 208)
+    # Use density-aware project acreage instead of full H3 cell size (~208 ac)
+    dist_km  = float(row.get("dist_km", 15) or 15)
+    acres    = realistic_acreage(dist_km, ptype)
+    h3_acres = float(row.get("acres", 208) or 208)   # kept for reference only
     cpf      = np.clip(float(row.get("cost_psf", COST_PSF[city]) or COST_PSF[city]),
                        COST_MIN, COST_MAX)
     lv_acre  = float(row.get("land_val_acre", 0) or 0)
@@ -130,7 +164,8 @@ def forecast_lot(row, city):
     return dict(land_val=land_val, total_cost=total_cost, equity=equity,
                 stab_val=stab_val, exit_val=exit_val,
                 noi_yr1=noi_yr1, noi_yr5=noi_yr5, irr=irr, em=em,
-                buildable_sf=buildable_sf, cap_rate=cap)
+                buildable_sf=buildable_sf, cap_rate=cap,
+                project_acres=acres, h3_cell_acres=h3_acres)
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 phx_raw = pd.read_csv("docs/_phx_opps.csv", encoding="utf-8", encoding_errors="replace")
@@ -164,7 +199,8 @@ def build_forecast_df(city_df, city):
             "opportunity_score":  round(row["score"], 4),
             "lat":                round(row["lat"], 5),
             "lon":                round(row["lon"], 5),
-            "acreage_est":        round(row["acres"], 1),
+            "h3_cell_acres":      round(row["acres"], 1),
+            "project_acres":      round(f["project_acres"], 1),
             "dist_to_center_km":  round(row["dist_km"], 1),
             "property_type":      row["type"],
             "land_value_current": round(f["land_val"]),
@@ -198,6 +234,7 @@ TABLE_COLS = [
     ("rank",       "#"),
     ("score",      "Score"),
     ("type",       "Type"),
+    ("proj_ac",    "Project\nAcres"),
     ("land_now",   "Land Value\n(Current)"),
     ("dev_cost",   "Total Dev\nCost"),
     ("stab_val",   "Stabilised\nValue (~2 yr)"),
@@ -219,6 +256,7 @@ def build_top5_display(city_df, city):
             "rank":     i + 1,
             "score":    f"{row['score']:.4f}",
             "type":     str(row.get("type","—")).title(),
+            "proj_ac":  f"{f['project_acres']:.1f} ac",
             "land_now": f"${f['land_val']/1e6:.2f}M" if f["land_val"] > 0 else "—",
             "dev_cost": f"${f['total_cost']/1e6:.1f}M",
             "stab_val": f"${f['stab_val']/1e6:.1f}M",
@@ -327,8 +365,8 @@ def save_table(df_tbl, city_name, c_t1, out_path):
              "5-year exit value.   IRR = equity return incl. construction carry & lease-up.",
              ha="center", va="top", fontsize=9, color=C_MUTED)
 
-    # Column widths
-    col_w = [0.035, 0.065, 0.075, 0.090, 0.090, 0.100, 0.100, 0.085, 0.085, 0.085, 0.065, 0.080]
+    # Column widths (13 cols now)
+    col_w = [0.030, 0.058, 0.068, 0.060, 0.082, 0.082, 0.090, 0.090, 0.076, 0.076, 0.076, 0.058, 0.054]
     assert len(col_w) == n_cols, f"{len(col_w)} vs {n_cols}"
     pad     = 0.008
     x0      = [sum(col_w[:j]) for j in range(n_cols)]
