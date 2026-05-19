@@ -1,0 +1,66 @@
+# Scoring pipeline configuration — all thresholds and controls
+# Values here override the hardcoded defaults in lot_finder.py.
+# Any key omitted falls back to the in-code default.
+
+# ── Fix 1: Developability mask ────────────────────────────────────────────────
+developability_mask:
+  enabled: true
+
+  # Minimum fraction of H3 cell area that must be undisturbed/developable.
+  # Cells below this threshold are dropped from the candidate pool before scoring.
+  min_developable_frac: 0.20
+
+  # Local directory for caching downloaded exclusion geometry (null = no cache).
+  # First run downloads from APIs; subsequent runs load from cache.
+  geometry_cache_dir: "D:/urbangrowth_data/raw/developability"
+
+  # Optional: supply pre-fetched files instead of triggering API downloads.
+  # Leave null to use automatic download + hardcoded fallbacks.
+  padus_gpkg:   null   # path to PAD-US 3.0 GeoPackage/GeoJSON
+  nhd_gpkg:     null   # path to NHD waterbody GeoJSON
+  faa_geojson:  null   # path to FAA airport footprints GeoJSON
+
+  # Always overlay the hardcoded named-preserve/airport polygons even when
+  # API downloads succeed (belt-and-suspenders for high-confidence areas).
+  use_hardcoded_fallbacks: true
+
+# ── Fix 2: Edge effects ────────────────────────────────────────────────────────
+edge_effects:
+  enabled: true
+
+  # Cells with fewer than this fraction of non-null features are flagged.
+  # Feature set: built_pct, veg_pct, permit_count, investment_score,
+  #              ring_score_raw, neighbor_velocity  (6 total).
+  min_feature_completeness: 0.90
+
+  # Cells whose centroid is within this many H3 rings of the MSA bbox boundary
+  # are flagged. H3 resolution-8 ring ≈ 0.92 km.
+  min_boundary_rings: 2
+
+  # What to do with flagged cells:
+  #   "exclude"  — drop from candidate pool (before scoring)
+  #   "discount" — multiply ring_score_raw by discount_factor (keeps cell but penalises it)
+  mode: "exclude"
+
+  # Discount multiplier applied to ring_score_raw when mode = "discount".
+  discount_factor: 0.75
+
+# ── Fix 3: Score semantics ─────────────────────────────────────────────────────
+score_semantics:
+  # Re-rank the composite score into true percentiles after compositing.
+  # Without this the max composite is ~0.70-0.74 (no cell dominates all 4
+  # sub-dimensions simultaneously), which is misleading for a "percentile" legend.
+  # When true, opportunity_score ∈ [0, 1] strictly, where 1.0 = top cell.
+  # The raw composite is retained in opportunity_score_raw for audit.
+  rerank_to_percentile: true
+
+# ── Fix 4: Spatial diversity for Top-N selection ──────────────────────────────
+top_n_selection:
+  # Number of recommendations to surface per city.
+  n: 5
+
+  # Minimum H3 grid ring distance between any two selected cells.
+  # H3 resolution-8: 1 ring ≈ 0.92 km, so 10 rings ≈ 9.2 km.
+  # Enforces geographic spread to prevent clustering recommendations
+  # into the same 2-3 neighbourhoods.
+  min_rings: 10

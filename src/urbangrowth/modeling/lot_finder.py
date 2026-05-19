@@ -52,13 +52,29 @@ from sqlalchemy import text
 from urbangrowth.config import data_path
 from urbangrowth.db.loaders import _engine
 
+try:
+    import yaml as _yaml
+except ImportError:
+    _yaml = None  # fall back to hardcoded defaults
+
 load_dotenv()
 log = structlog.get_logger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_CITY_IDS = {"phoenix": 1, "austin": 2}
+_CITY_IDS   = {"phoenix": 1, "austin": 2}
+_CITY_KEYS  = {v: k for k, v in _CITY_IDS.items()}   # {1: "phoenix", 2: "austin"}
 _CITY_CENTERS = {1: (33.4484, -112.0740), 2: (30.2672, -97.7431)}
+
+# H3 resolution-8 approximate ring spacing in km (hex edge-length * 2 ≈ 0.922 km).
+# Used to convert metric boundary distances into ring counts.
+_H3_RES8_RING_KM = 0.922
+
+# Feature columns evaluated for completeness ratio (Fix 2).
+_COMPLETENESS_FEATURES = [
+    "built_pct", "veg_pct", "permit_count",
+    "investment_score", "ring_score_raw", "neighbor_velocity",
+]
 
 # Urban-fringe ring where undeveloped lots have highest development pressure.
 # (ring_min_km, ring_max_km) — score=1.0 inside ring, ramps down outside.
@@ -97,6 +113,7 @@ CREATE TABLE IF NOT EXISTS lot_opportunities (
     city_id                 INTEGER NOT NULL,
     as_of_date              DATE    NOT NULL,
     opportunity_score       FLOAT   NOT NULL,
+    opportunity_score_raw   FLOAT,
     investment_score        FLOAT,
     built_pct               FLOAT,
     veg_pct                 FLOAT,
@@ -111,9 +128,37 @@ CREATE TABLE IF NOT EXISTS lot_opportunities (
     est_land_value_acre     FLOAT,
     est_construction_months INTEGER,
     est_cost_per_sqft       FLOAT,
+    -- Fix 1: developability mask
+    developable             BOOLEAN,
+    developable_frac        FLOAT,
+    exclusion_reasons       TEXT,
+    -- Fix 2: edge effects
+    feature_completeness    FLOAT,
+    boundary_rings          INTEGER,
+    edge_flagged            BOOLEAN,
     UNIQUE (h3_index, city_id, as_of_date)
 );
 """
+
+# Columns added in later schema versions — applied as idempotent migrations
+_SCHEMA_MIGRATIONS = [
+    ("neighbor_velocity",       "FLOAT"),
+    ("ring_score",              "FLOAT"),
+    ("nearest_address",         "TEXT"),
+    ("dominant_property_type",  "TEXT"),
+    ("est_land_value_acre",     "FLOAT"),
+    ("est_construction_months", "INTEGER"),
+    ("est_cost_per_sqft",       "FLOAT"),
+    # Fix 1
+    ("opportunity_score_raw",   "FLOAT"),
+    ("developable",             "BOOLEAN"),
+    ("developable_frac",        "FLOAT"),
+    ("exclusion_reasons",       "TEXT"),
+    # Fix 2
+    ("feature_completeness",    "FLOAT"),
+    ("boundary_rings",          "INTEGER"),
+    ("edge_flagged",            "BOOLEAN"),
+]
 
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -161,6 +206,139 @@ def _rank_norm(s: pd.Series) -> pd.Series:
     produce consistent relative orderings.
     """
     return s.rank(pct=True, method="average")
+
+
+# ── Scoring config ────────────────────────────────────────────────────────────
+
+_SCORING_CFG_PATH  = Path(__file__).parents[3] / "config" / "scoring.yaml"
+_CITIES_CFG_PATH   = Path(__file__).parents[3] / "config" / "cities.yaml"
+
+# In-code defaults — used when scoring.yaml is missing or a key is absent.
+_SCORING_DEFAULTS: dict = {
+    "developability_mask": {
+        "enabled": True,
+        "min_developable_frac": 0.20,
+        "geometry_cache_dir": None,
+        "padus_gpkg": None,
+        "nhd_gpkg": None,
+        "faa_geojson": None,
+        "use_hardcoded_fallbacks": True,
+    },
+    "edge_effects": {
+        "enabled": True,
+        "min_feature_completeness": 0.90,
+        "min_boundary_rings": 2,
+        "mode": "exclude",       # "exclude" | "discount"
+        "discount_factor": 0.75,
+    },
+    "score_semantics": {
+        "rerank_to_percentile": True,
+    },
+    "top_n_selection": {
+        "n": 5,
+        "min_rings": 10,
+    },
+}
+
+
+def _load_scoring_cfg() -> dict:
+    """Load config/scoring.yaml and deep-merge with hardcoded defaults."""
+    file_cfg: dict = {}
+    if _yaml is not None and _SCORING_CFG_PATH.exists():
+        try:
+            with open(_SCORING_CFG_PATH) as fh:
+                file_cfg = _yaml.safe_load(fh) or {}
+        except Exception as exc:
+            log.warning("scoring_cfg_load_failed", path=str(_SCORING_CFG_PATH),
+                        error=str(exc))
+    # Per-section merge: file values override defaults, missing keys fall to default
+    return {
+        section: {**defaults, **(file_cfg.get(section) or {})}
+        for section, defaults in _SCORING_DEFAULTS.items()
+    }
+
+
+def _load_cities_cfg() -> dict:
+    """Return the 'cities' dict from config/cities.yaml (or {} on error)."""
+    if _yaml is None or not _CITIES_CFG_PATH.exists():
+        return {}
+    try:
+        with open(_CITIES_CFG_PATH) as fh:
+            raw = _yaml.safe_load(fh) or {}
+        return raw.get("cities", {})
+    except Exception as exc:
+        log.warning("cities_cfg_load_failed", error=str(exc))
+        return {}
+
+
+def _dist_to_bbox_km(lat: float, lon: float, bbox: list) -> float:
+    """Approximate km from (lat, lon) to the nearest edge of *bbox* [W,S,E,N].
+
+    Uses a planar approximation accurate to ~1 % at Phoenix/Austin latitudes.
+    """
+    west, south, east, north = bbox
+    lat_km = 111.32
+    lon_km = 111.32 * math.cos(math.radians(lat))
+    return min(
+        abs(lon - west)  * lon_km,
+        abs(lon - east)  * lon_km,
+        abs(lat - south) * lat_km,
+        abs(lat - north) * lat_km,
+    )
+
+
+# ── Fix 4: Spatial-diversity Top-N selector ───────────────────────────────────
+
+def diverse_top_n(
+    df: pd.DataFrame,
+    n: int = 5,
+    min_rings: int = 10,
+    score_col: str = "opportunity_score",
+) -> pd.DataFrame:
+    """Greedy Top-N selector with a spatial-diversity constraint.
+
+    Algorithm
+    ---------
+    1. Sort candidates by *score_col* descending.
+    2. Pick the highest-scoring cell; add it to the selection.
+    3. Exclude all cells within *min_rings* H3 rings of the selected cell.
+    4. Repeat until *n* cells are selected or candidates are exhausted.
+
+    This prevents the common failure mode where all Top-N picks cluster
+    into 2-3 adjacent high-scoring neighbourhoods.
+
+    Parameters
+    ----------
+    df        : DataFrame with 'h3_index' and *score_col*.
+    n         : Number of cells to return.
+    min_rings : Minimum H3 grid-ring distance between any two selected cells.
+    score_col : Column to sort by (descending).
+
+    Returns
+    -------
+    DataFrame with the selected rows plus a ``diverse_rank`` column (1 = best).
+    The original unconstrained rank is preserved via ``score_col`` ordering.
+    """
+    ranked   = df.sort_values(score_col, ascending=False).reset_index(drop=True)
+    selected = []
+    excluded: set[str] = set()
+
+    for _, row in ranked.iterrows():
+        idx = row["h3_index"]
+        if idx in excluded:
+            continue
+        selected.append(row)
+        if len(selected) >= n:
+            break
+        # Mask the neighbourhood so subsequent picks are spatially separated
+        neighborhood = h3.grid_disk(idx, min_rings)
+        excluded.update(neighborhood)
+
+    if not selected:
+        return pd.DataFrame(columns=list(df.columns) + ["diverse_rank"])
+    result = pd.DataFrame(selected).reset_index(drop=True)
+    result["diverse_rank"] = range(1, len(result) + 1)
+    return result
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -328,7 +506,17 @@ def build_opportunities(city_id: int, engine) -> pd.DataFrame:
       25% — ring-based proximity (fringe zone gets max score; downtown penalized)
       25% — vacancy signal (low built_pct or high veg_pct)
       15% — GBM investment score (supplementary ML signal)
+
+    Pipeline fixes applied (controlled via config/scoring.yaml):
+      Fix 1 — Developability mask (protected/tribal/water/airport exclusion)
+      Fix 2 — Edge-effect filter (MSA-boundary buffer + feature completeness)
+      Fix 3 — Score re-ranking to true percentile [0, 1]
+    Spatial diversity (Fix 4) is applied by diverse_top_n() at call-time.
     """
+    scoring_cfg = _load_scoring_cfg()
+    # bbox / utm_crs loaded lazily inside dev-mask block; initialise here for edge effects
+    bbox    = None
+    utm_crs = "EPSG:32612"
     feats = _load_h3_features(engine, city_id)
     if feats.empty:
         log.warning("no_h3_features", city_id=city_id)
@@ -412,39 +600,213 @@ def build_opportunities(city_id: int, engine) -> pd.DataFrame:
     # Vacancy signal
     candidates["vacancy_raw"] = _vacancy_signal(candidates).values
 
+    # ── Fix 2a: Feature completeness ─────────────────────────────────────────
+    # Ratio of non-null features per cell.  Computed now (before any cells are
+    # dropped) so completeness reflects the full feature pipeline.
+    completeness_cols = [c for c in _COMPLETENESS_FEATURES if c in candidates.columns]
+    candidates["feature_completeness"] = (
+        candidates[completeness_cols].notna().sum(axis=1) / max(len(completeness_cols), 1)
+    )
+
+    n_after_saturation = len(candidates)
+
+    # ── Fix 1: Developability mask ────────────────────────────────────────────
+    # Drop cells whose overlap with protected/tribal/water/airport land exceeds
+    # (1 - min_developable_frac) of the cell area.  Non-developable cells are
+    # retained in masked_out so they can be audited.
+    n_before_mask = n_after_saturation
+    masked_out    = pd.DataFrame()
+    dev_cfg       = scoring_cfg["developability_mask"]
+
+    if dev_cfg["enabled"]:
+        city_key = _CITY_KEYS.get(city_id, "unknown")
+        cities_cfg = _load_cities_cfg()
+        city_geo   = cities_cfg.get(city_key, {})
+        bbox       = city_geo.get("bbox", None)
+        utm_crs    = city_geo.get("utm_crs", "EPSG:32612")
+
+        cache_dir_raw = dev_cfg.get("geometry_cache_dir")
+        cache_dir = Path(cache_dir_raw) if cache_dir_raw else None
+
+        try:
+            from urbangrowth.modeling.developability_mask import build_mask
+            mask_df = build_mask(
+                h3_cells  = candidates["h3_index"].tolist(),
+                city_key  = city_key,
+                bbox      = bbox,
+                utm_crs   = utm_crs,
+                cfg       = dev_cfg,
+                cache_dir = cache_dir,
+            )
+            candidates = candidates.merge(
+                mask_df[["h3_index", "developable", "developable_frac",
+                          "exclusion_reasons"]],
+                on="h3_index", how="left",
+            )
+            # Cells not in mask output (shouldn't happen) default to developable
+            candidates["developable"]       = candidates["developable"].fillna(True)
+            candidates["developable_frac"]  = candidates["developable_frac"].fillna(1.0)
+            candidates["exclusion_reasons"] = candidates["exclusion_reasons"].fillna("")
+
+            masked_out = candidates[~candidates["developable"]].copy()
+            candidates = candidates[candidates["developable"]].copy()
+
+            log.info("developability_mask_applied",
+                     city_id=city_id,
+                     removed=len(masked_out),
+                     remaining=len(candidates),
+                     reason_breakdown=masked_out["exclusion_reasons"]
+                         .value_counts().to_dict() if not masked_out.empty else {})
+        except Exception as exc:
+            log.warning("developability_mask_failed", error=str(exc))
+            candidates["developable"]       = True
+            candidates["developable_frac"]  = 1.0
+            candidates["exclusion_reasons"] = ""
+    else:
+        candidates["developable"]       = True
+        candidates["developable_frac"]  = 1.0
+        candidates["exclusion_reasons"] = ""
+
+    # ── Fix 2b: Edge-effects filter ───────────────────────────────────────────
+    # Flag cells that are within `min_boundary_rings` of the MSA bbox boundary
+    # OR have feature completeness below `min_feature_completeness`.
+    # Depending on config mode, either drop or discount these cells.
+    edge_cfg     = scoring_cfg["edge_effects"]
+    n_before_edge = len(candidates)
+
+    if edge_cfg["enabled"] and bbox is not None:
+        city_key_for_edge = _CITY_KEYS.get(city_id, "unknown")
+        if city_key_for_edge == "unknown" and bbox is None:
+            cities_cfg = _load_cities_cfg()
+            city_geo   = cities_cfg.get(_CITY_KEYS.get(city_id, ""), {})
+            bbox       = city_geo.get("bbox", None)
+
+        if bbox is not None:
+            candidates["boundary_dist_km"] = candidates["h3_index"].map(
+                lambda idx: _dist_to_bbox_km(*_h3_centroid(idx), bbox)
+            )
+            candidates["boundary_rings"] = (
+                candidates["boundary_dist_km"] / _H3_RES8_RING_KM
+            ).astype(int)
+        else:
+            candidates["boundary_dist_km"] = np.nan
+            candidates["boundary_rings"]   = 999  # unknown → not flagged
+
+        candidates["edge_flagged"] = (
+            (candidates["boundary_rings"] < edge_cfg["min_boundary_rings"])
+            | (candidates["feature_completeness"] < edge_cfg["min_feature_completeness"])
+        )
+
+        n_edge_flagged = int(candidates["edge_flagged"].sum())
+        log.info("edge_effects_filter",
+                 city_id=city_id,
+                 flagged=n_edge_flagged,
+                 mode=edge_cfg["mode"],
+                 min_rings=edge_cfg["min_boundary_rings"],
+                 min_completeness=edge_cfg["min_feature_completeness"])
+
+        if edge_cfg["mode"] == "exclude":
+            candidates = candidates[~candidates["edge_flagged"]].copy()
+        else:  # "discount" — reduce ring_score_raw for edge cells
+            factor = float(edge_cfg.get("discount_factor", 0.75))
+            candidates.loc[candidates["edge_flagged"], "ring_score_raw"] *= factor
+    else:
+        candidates["boundary_dist_km"] = np.nan
+        candidates["boundary_rings"]   = np.nan
+        candidates["edge_flagged"]     = False
+
     # Rank-based normalization (percentile ranks, scale-invariant)
-    nv_norm  = _rank_norm(candidates["neighbor_velocity"])
+    nv_norm   = _rank_norm(candidates["neighbor_velocity"])
     ring_norm = _rank_norm(candidates["ring_score_raw"])
     vac_norm  = _rank_norm(candidates["vacancy_raw"])
     inv_norm  = _rank_norm(candidates["investment_score"].fillna(
         candidates["investment_score"].median()
     ))
 
-    candidates["opportunity_score"] = (
+    # Raw composite: weighted average of component percentile ranks.
+    # Maximum is ~0.70-0.74 because no single cell tops all 4 sub-dimensions.
+    candidates["opportunity_score_raw"] = (
         _W_NEIGHBOR_VELOCITY * nv_norm
         + _W_RING_PROXIMITY  * ring_norm
         + _W_VACANCY         * vac_norm
         + _W_INVESTMENT      * inv_norm
     )
 
+    # ── Fix 3: Score re-ranking to true percentile ────────────────────────────
+    # Re-rank the composite so that opportunity_score ∈ [0, 1] uniformly —
+    # the top cell scores 1.0 and the bottom cell scores ≈ 0.0.
+    # The un-reranked value is kept in opportunity_score_raw for audit.
+    score_cfg = scoring_cfg["score_semantics"]
+    if score_cfg.get("rerank_to_percentile", True):
+        candidates["opportunity_score"] = _rank_norm(candidates["opportunity_score_raw"])
+    else:
+        candidates["opportunity_score"] = candidates["opportunity_score_raw"]
+
+    # Score distribution summary (always logged for audit / CI)
+    s = candidates["opportunity_score"]
+    city_label = _CITY_KEYS.get(city_id, str(city_id))
+    print(f"\n── Score distribution [{city_label}] ──────────────────────────────")
+    print(f"   Scored cells : {len(s)}")
+    print(f"   min={s.min():.4f}  max={s.max():.4f}  "
+          f"Q25={s.quantile(.25):.4f}  Q50={s.quantile(.50):.4f}  "
+          f"Q75={s.quantile(.75):.4f}  Q90={s.quantile(.90):.4f}")
+    if score_cfg.get("rerank_to_percentile", True):
+        raw = candidates["opportunity_score_raw"]
+        print(f"   Raw composite: min={raw.min():.4f}  max={raw.max():.4f}  "
+              f"(reranked → true percentile)")
+    print()
+
     p50 = candidates["opportunity_score"].quantile(0.50)
     p75 = candidates["opportunity_score"].quantile(0.75)
     p90 = candidates["opportunity_score"].quantile(0.90)
     candidates["tier"] = candidates["opportunity_score"].map(
-        lambda s: _assign_tier(s, p50, p75, p90)
+        lambda sc: _assign_tier(sc, p50, p75, p90)
     )
 
+    # Before/after pipeline summary
+    n_tier1 = int((candidates["tier"] == "Tier 1 — Top 10%").sum())
+    n_tier2 = int((candidates["tier"] == "Tier 2 — Top 25%").sum())
+    print(f"── Pipeline summary [{city_label}] ────────────────────────────────")
+    print(f"   Saturation filter : {len(candidates) + len(masked_out) + (n_before_edge - len(candidates)):>5} → kept after sat filter")
+    print(f"   Developability mask: removed {n_before_mask - len(candidates) - (n_before_edge - len(candidates)):>4} cells "
+          f"(protected/tribal/water/airport)")
+    edge_removed = n_before_edge - len(candidates) if edge_cfg["enabled"] else 0
+    print(f"   Edge-effects filter: removed {edge_removed:>4} cells "
+          f"(within {edge_cfg['min_boundary_rings']} rings of boundary / low completeness)")
+    print(f"   Final scored pool  : {len(candidates):>5} cells")
+    print(f"   Tier 1 (Top 10%)   : {n_tier1:>5} cells")
+    print(f"   Tier 2 (Top 25%)   : {n_tier2:>5} cells")
+    print()
+
     candidates["as_of_date"] = scoring_date.date()
-    candidates["city_id"] = city_id
+    candidates["city_id"]   = city_id
+
+    # Ensure all new columns exist (guards against disabled-mask paths)
+    for col, default in [
+        ("developable",        True),
+        ("developable_frac",   1.0),
+        ("exclusion_reasons",  ""),
+        ("feature_completeness", 1.0),
+        ("boundary_rings",     np.nan),
+        ("edge_flagged",       False),
+        ("opportunity_score_raw", candidates.get("opportunity_score_raw",
+                                                  candidates["opportunity_score"])),
+    ]:
+        if col not in candidates.columns:
+            candidates[col] = default
 
     result = candidates[[
         "h3_index", "city_id", "as_of_date",
-        "opportunity_score", "investment_score",
+        "opportunity_score", "opportunity_score_raw", "investment_score",
         "built_pct", "veg_pct",
         "neighbor_velocity", "dist_to_center_km", "ring_score_raw",
         "zoning_category", "acreage_est", "tier",
         "nearest_address", "dominant_type",
         "est_land_value_acre", "est_construction_months", "est_cost_per_sqft",
+        # Fix 1 columns
+        "developable", "developable_frac", "exclusion_reasons",
+        # Fix 2 columns
+        "feature_completeness", "boundary_rings", "edge_flagged",
     ]].rename(columns={
         "ring_score_raw": "ring_score",
         "dominant_type":  "dominant_property_type",
@@ -601,20 +963,12 @@ def save_opportunities(opps: pd.DataFrame, engine) -> None:
 
     with engine.begin() as conn:
         conn.execute(text(_DDL))
-        # Migrate schema: add new columns if they don't exist (idempotent)
-        for col, typedef in [
-            ("neighbor_velocity",       "FLOAT"),
-            ("ring_score",              "FLOAT"),
-            ("nearest_address",         "TEXT"),
-            ("dominant_property_type",  "TEXT"),
-            ("est_land_value_acre",     "FLOAT"),
-            ("est_construction_months", "INTEGER"),
-            ("est_cost_per_sqft",       "FLOAT"),
-        ]:
+        # Idempotent schema migrations: add any new columns that don't exist yet
+        for col, typedef in _SCHEMA_MIGRATIONS:
             conn.execute(text(
                 f"ALTER TABLE lot_opportunities ADD COLUMN IF NOT EXISTS {col} {typedef}"
             ))
-        # Remove old column if present
+        # Remove legacy column if present
         conn.execute(text(
             "ALTER TABLE lot_opportunities DROP COLUMN IF EXISTS permit_velocity"
         ))
@@ -629,12 +983,18 @@ def save_opportunities(opps: pd.DataFrame, engine) -> None:
                 v = r.get(col, np.nan)
                 return None if (v is None or (isinstance(v, float) and np.isnan(v))) else float(v)
 
+            def _b(col, default=None):
+                v = r.get(col, default)
+                return None if v is None else bool(v)
+
             ec = r.get("est_construction_months")
+            br = r.get("boundary_rings")
             rows.append({
                 "h3_index":                str(r["h3_index"]),
                 "city_id":                 city_id,
                 "as_of_date":              as_of,
                 "opportunity_score":       float(r["opportunity_score"]),
+                "opportunity_score_raw":   _f("opportunity_score_raw"),
                 "investment_score":        _f("investment_score"),
                 "built_pct":               _f("built_pct"),
                 "veg_pct":                 _f("veg_pct"),
@@ -649,6 +1009,14 @@ def save_opportunities(opps: pd.DataFrame, engine) -> None:
                 "est_land_value_acre":     _f("est_land_value_acre"),
                 "est_construction_months": None if (ec is None or (isinstance(ec, float) and np.isnan(ec))) else int(ec),
                 "est_cost_per_sqft":       _f("est_cost_per_sqft"),
+                # Fix 1
+                "developable":             _b("developable", True),
+                "developable_frac":        _f("developable_frac"),
+                "exclusion_reasons":       r.get("exclusion_reasons") or "",
+                # Fix 2
+                "feature_completeness":    _f("feature_completeness"),
+                "boundary_rings":          None if (br is None or (isinstance(br, float) and np.isnan(br))) else int(br),
+                "edge_flagged":            _b("edge_flagged", False),
             })
 
         chunk_size = 500
@@ -657,21 +1025,28 @@ def save_opportunities(opps: pd.DataFrame, engine) -> None:
             conn.execute(
                 text("""
                     INSERT INTO lot_opportunities
-                        (h3_index, city_id, as_of_date, opportunity_score,
-                         investment_score, built_pct, veg_pct, neighbor_velocity,
+                        (h3_index, city_id, as_of_date,
+                         opportunity_score, opportunity_score_raw, investment_score,
+                         built_pct, veg_pct, neighbor_velocity,
                          dist_to_center_km, ring_score, zoning_category,
                          acreage_est, tier,
                          nearest_address, dominant_property_type,
-                         est_land_value_acre, est_construction_months, est_cost_per_sqft)
+                         est_land_value_acre, est_construction_months, est_cost_per_sqft,
+                         developable, developable_frac, exclusion_reasons,
+                         feature_completeness, boundary_rings, edge_flagged)
                     VALUES
-                        (:h3_index, :city_id, :as_of_date, :opportunity_score,
-                         :investment_score, :built_pct, :veg_pct, :neighbor_velocity,
+                        (:h3_index, :city_id, :as_of_date,
+                         :opportunity_score, :opportunity_score_raw, :investment_score,
+                         :built_pct, :veg_pct, :neighbor_velocity,
                          :dist_to_center_km, :ring_score, :zoning_category,
                          :acreage_est, :tier,
                          :nearest_address, :dominant_property_type,
-                         :est_land_value_acre, :est_construction_months, :est_cost_per_sqft)
+                         :est_land_value_acre, :est_construction_months, :est_cost_per_sqft,
+                         :developable, :developable_frac, :exclusion_reasons,
+                         :feature_completeness, :boundary_rings, :edge_flagged)
                     ON CONFLICT (h3_index, city_id, as_of_date) DO UPDATE SET
                         opportunity_score       = EXCLUDED.opportunity_score,
+                        opportunity_score_raw   = EXCLUDED.opportunity_score_raw,
                         investment_score        = EXCLUDED.investment_score,
                         built_pct               = EXCLUDED.built_pct,
                         veg_pct                 = EXCLUDED.veg_pct,
@@ -685,7 +1060,13 @@ def save_opportunities(opps: pd.DataFrame, engine) -> None:
                         dominant_property_type  = EXCLUDED.dominant_property_type,
                         est_land_value_acre     = EXCLUDED.est_land_value_acre,
                         est_construction_months = EXCLUDED.est_construction_months,
-                        est_cost_per_sqft       = EXCLUDED.est_cost_per_sqft
+                        est_cost_per_sqft       = EXCLUDED.est_cost_per_sqft,
+                        developable             = EXCLUDED.developable,
+                        developable_frac        = EXCLUDED.developable_frac,
+                        exclusion_reasons       = EXCLUDED.exclusion_reasons,
+                        feature_completeness    = EXCLUDED.feature_completeness,
+                        boundary_rings          = EXCLUDED.boundary_rings,
+                        edge_flagged            = EXCLUDED.edge_flagged
                 """),
                 chunk,
             )
@@ -702,9 +1083,10 @@ def save_opportunities(opps: pd.DataFrame, engine) -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(cities: list[str] | None = None, backtest_only: bool = False) -> None:
-    engine = _engine()
+    engine  = _engine()
     targets = {k: v for k, v in _CITY_IDS.items()
                if cities is None or k in cities}
+    scoring_cfg = _load_scoring_cfg()
 
     for city_name, city_id in targets.items():
         log.info("lot_finder_start", city=city_name)
@@ -719,6 +1101,39 @@ def run(cities: list[str] | None = None, backtest_only: bool = False) -> None:
         if not backtest_only:
             opps = build_opportunities(city_id, engine)
             save_opportunities(opps, engine)
+
+            # ── Fix 4: Spatial-diversity Top-N comparison ─────────────────────
+            top_cfg = scoring_cfg["top_n_selection"]
+            n_picks = int(top_cfg.get("n", 5))
+            min_rings = int(top_cfg.get("min_rings", 10))
+
+            tier1 = opps[opps["tier"] == "Tier 1 — Top 10%"].copy()
+            if not tier1.empty:
+                print(f"── Fix 4: Top-{n_picks} comparison [{city_name}] ───────────────────────")
+
+                # Standard (unconstrained) top-N
+                std_top = tier1.nlargest(n_picks, "opportunity_score")[
+                    ["h3_index", "opportunity_score", "dist_to_center_km",
+                     "dominant_property_type"]
+                ].reset_index(drop=True)
+                print(f"  Standard top-{n_picks} (unconstrained):")
+                for i, row in std_top.iterrows():
+                    lat, lon = h3.cell_to_latlng(row["h3_index"])
+                    print(f"    #{i+1}  score={row['opportunity_score']:.4f}"
+                          f"  lat={lat:.4f} lon={lon:.4f}"
+                          f"  dist={row.get('dist_to_center_km', float('nan')):.1f}km"
+                          f"  type={row.get('dominant_property_type','?')}")
+
+                # Diverse top-N
+                div_top = diverse_top_n(tier1, n=n_picks, min_rings=min_rings)
+                print(f"  Diverse top-{n_picks} (min {min_rings} rings apart):")
+                for _, row in div_top.iterrows():
+                    lat, lon = h3.cell_to_latlng(row["h3_index"])
+                    print(f"    #{int(row['diverse_rank'])}  score={row['opportunity_score']:.4f}"
+                          f"  lat={lat:.4f} lon={lon:.4f}"
+                          f"  dist={row.get('dist_to_center_km', float('nan')):.1f}km"
+                          f"  type={row.get('dominant_property_type','?')}")
+                print()
 
 
 def main() -> None:
